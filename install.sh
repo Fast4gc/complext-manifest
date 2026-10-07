@@ -57,6 +57,40 @@ ensure_docker_daemon() {
     warn "daemon Docker nao respondeu; rode 'sudo systemctl start docker' depois."
 }
 
+# Checa acesso ao daemon com mensagem acionavel (o erro cru do Compose
+# e apenas "permission denied", sem dizer como resolver).
+ensure_docker_access() {
+  if docker info >/dev/null 2>&1; then return 0; fi
+  local msg="sem acesso ao daemon Docker (permission denied em /var/run/docker.sock)"
+  if [ "$(id -u)" -ne 0 ] &&
+     getent group docker >/dev/null 2>&1 &&
+     ! id -nG | tr ' ' '\n' | grep -qx docker; then
+    die "$msg.
+  Corrija colocando o usuario no grupo docker:
+    sudo usermod -aG docker $USER
+  Depois SAIA e entre de novo (ou rode: newgrp docker)
+  e confirme com: docker info"
+  fi
+  die "$msg. Rode o instalador com sudo ou peca ao administrador
+  para colocar $USER no grupo docker."
+}
+
+# Compose (Bake) precisa do plugin buildx para buildar imagens.
+ensure_builder() {
+  if docker buildx version >/dev/null 2>&1; then return 0; fi
+  warn "plugin buildx ausente (o Docker Compose precisa dele para buildar)."
+  if command -v apt-get >/dev/null 2>&1 && [ -n "$SUDO" ] &&
+     apt-cache show docker-buildx-plugin >/dev/null 2>&1; then
+    log "instalando docker-buildx-plugin..."
+    $SUDO apt-get install -y -qq docker-buildx-plugin >/dev/null 2>&1 || true
+  fi
+  if docker buildx version >/dev/null 2>&1; then return 0; fi
+  die "buildx indisponivel. Instale com:
+    sudo apt-get install -y docker-buildx-plugin
+  ou baixe o binario de docker/buildx (GitHub) para:
+    /usr/local/lib/docker/cli-plugins/docker-buildx"
+}
+
 install_docker() {
   command -v apt-get >/dev/null 2>&1 || die "so suportamos Ubuntu/Debian (apt-get ausente)"
   [ -n "$SUDO" ] || die "preciso de sudo/root para instalar pacotes"
@@ -71,6 +105,12 @@ install_docker() {
       die "falha ao instalar docker.io; instale o Docker manualmente e rode ./install.sh novamente"
   else
     log "Docker ja instalado, reutilizando."
+  fi
+
+  # Compose (Bake) precisa do buildx para buildar.
+  if ! docker buildx version >/dev/null 2>&1; then
+    $SUDO apt-get install -y -qq docker-buildx-plugin >/dev/null 2>&1 ||
+      warn "docker-buildx-plugin nao disponivel via apt; o Compose avisara se precisar."
   fi
 
   if ! docker compose version >/dev/null 2>&1; then
@@ -104,6 +144,7 @@ install_docker() {
 }
 
 compose() {
+  ensure_docker_access
   docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" "$@"
 }
 
@@ -270,6 +311,9 @@ cmd_install() {
 
   setup_env
 
+  ensure_docker_access
+  ensure_builder
+
   log "construindo imagens..."
   compose build
 
@@ -352,6 +396,7 @@ cmd_update() {
     log "atualizando codigo (git pull)..."
     git pull --ff-only || warn "git pull falhou; continuando com o codigo atual."
   fi
+  ensure_builder
   log "reconstruindo imagens..."
   compose build --pull
   # shellcheck disable=SC2046

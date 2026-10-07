@@ -21,13 +21,22 @@ function makeProject() {
 }
 
 /** Stub do docker: registra os argumentos e simula sucesso/CLI de chaves. */
-function makeStubBin(dir) {
+/** Stub do docker: registra os argumentos e simula sucesso/CLI de chaves.
+ *  mode: 'ok' (padrao) | 'no-info' (socket negado) | 'no-buildx' */
+function makeStubBin(dir, mode = 'ok') {
   const bin = path.join(dir, 'stub-bin');
   fs.mkdirSync(bin, { recursive: true });
+  const extra = {
+    'no-info': `  "info"*) exit 1 ;;
+`,
+    'no-buildx': `  "buildx version"*) exit 1 ;;
+`,
+  }[mode] || '';
   const stub = `#!/usr/bin/env bash
 echo "docker $*" >> "$STUB_LOG"
 case "$*" in
   "compose version"*) echo "Docker Compose v2-stub"; exit 0 ;;
+${extra}  "buildx version"*) echo "docker buildx v0.20-stub"; exit 0 ;;
   *"cli.js key:create"*)
     echo "KEY_ID=stub-id"
     echo "KEY_VALUE=${BASE_KEY}"
@@ -183,6 +192,27 @@ test('comando desconhecido retorna erro com uso', () => {
   const res = runScript(dir, bin, 'install.sh', ['voar']);
   assert.notEqual(res.status, 0);
   assert.match(res.stderr, /comando desconhecido/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('acesso negado ao Docker: mensagem com usermod', () => {
+  const dir = makeProject();
+  const bin = makeStubBin(dir, 'no-info');
+  const res = runScript(dir, bin, 'install.sh', ['install', '--api-only']);
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /permission denied/);
+  assert.match(res.stderr, /grupo docker/);
+  assert.match(res.stderr, /usermod/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('buildx ausente: mensagem de instalacao do plugin', () => {
+  const dir = makeProject();
+  const bin = makeStubBin(dir, 'no-buildx');
+  const res = runScript(dir, bin, 'install.sh', ['install', '--api-only']);
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /buildx/);
+  assert.match(res.stderr, /docker-buildx-plugin|cli-plugins/);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
