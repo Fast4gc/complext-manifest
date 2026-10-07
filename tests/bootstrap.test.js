@@ -81,7 +81,7 @@ function startServerProcess(dir) {
 }
 
 /** Simula `curl ... | bash -s -- args` (script lido do stdin). */
-function runPipe(args, { cwd, stubBin, logFile }) {
+function runPipe(args, { cwd, stubBin, logFile, extraEnv = {} }) {
   const res = spawnSync('bash', ['-s', '--', ...args], {
     cwd,
     input: fs.readFileSync(BOOTSTRAP, 'utf8'),
@@ -92,6 +92,7 @@ function runPipe(args, { cwd, stubBin, logFile }) {
       PATH: `${stubBin}:${process.env.PATH}`,
       STUB_LOG: logFile,
       TMPDIR: cwd,
+      ...extraEnv,
     },
   });
   const log = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8') : '';
@@ -270,6 +271,42 @@ test('rejeita repositorio com formato errado', () => {
   });
   assert.notEqual(res.status, 0);
   assert.match(res.stderr, /repositorio invalido/);
+});
+
+test('caminho padrao (repo+ref, sem --url): valida "main" e baixa do codeload', () => {
+  // Regressao: bash POSIX nao entende \w em [..]; a regex antiga rejeitava "main"
+  // e o usuario recebia "referencia git invalida" logo no inicio.
+  const target = freshTarget();
+  const res = runPipe(
+    [
+      '--repo', 'Fast4gc/complext-manifest',
+      '--ref', 'main',
+      '--dir', target,
+      '--no-exec',
+    ],
+    {
+      cwd: env.base,
+      stubBin: env.stubBin,
+      logFile: env.logFile,
+      extraEnv: { INSTALL_CODELOAD_BASE: env.server.url },
+    },
+  );
+  assert.equal(res.status, 0, `saida: ${res.stdout}\n${res.stderr}`);
+  assert.equal(/referencia git invalida/.test(res.stdout + res.stderr), false);
+  assert.match(res.stdout, /baixando codigo/);
+  assert.match(res.stdout, /\/Fast4gc\/complext-manifest\/tar\.gz\/main/);
+  assert.ok(fs.existsSync(path.join(target, 'install.sh')), 'codigo baixado');
+  assert.ok(fs.existsSync(path.join(target, 'src', 'server.js')));
+});
+
+test('rejeita referencia git com caracteres invalidos', () => {
+  const res = runPipe(['--ref', 'ref com espaco', '--no-exec'], {
+    cwd: env.base,
+    stubBin: env.stubBin,
+    logFile: env.logFile,
+  });
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /referencia git invalida/);
 });
 
 test('alvo "." em pasta vazia: instala na pasta atual', () => {

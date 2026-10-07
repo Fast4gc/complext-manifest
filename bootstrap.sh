@@ -82,7 +82,9 @@ check_url_scheme() {
 
 if [ -z "$URL" ]; then
   [[ "$REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || die "repositorio invalido: $REPO (use owner/repo)"
-  [[ "$REF" =~ ^[\w./-]{1,240}$ ]] || die "referencia git invalida: $REF"
+  # Nota: bash usa regex POSIX — nao usar \w (nao existe em POSIX ERE).
+  [[ "$REF" =~ ^[A-Za-z0-9._/-]{1,240}$ ]] || die "referencia git invalida: $REF"
+  case "$REF" in *..*) die "referencia git invalida: $REF" ;; esac
 else
   check_url_scheme "$URL"
 fi
@@ -144,7 +146,11 @@ download_tarball() {
   if [ -n "$URL" ]; then
     url="$URL"
   else
-    url="https://codeload.github.com/${REPO}/tar.gz/${REF}"
+    # INSTALL_CODELOAD_BASE existe para testes (aponta para um servidor local);
+    # em producao o padrao e o codeload do GitHub.
+    local base="${INSTALL_CODELOAD_BASE:-https://codeload.github.com}"
+    base="${base%/}"
+    url="${base}/${REPO}/tar.gz/${REF}"
   fi
   check_url_scheme "$url"
   log "baixando codigo ($url)..."

@@ -30,6 +30,11 @@ const server = http.createServer((req, res) => {
       res.writeHead(200, { 'content-type': 'application/gzip' });
       return res.end(fs.readFileSync(path.join(root, 'repo.tar.gz')));
     }
+    // Caminho do codeload: /<owner>/<repo>/tar.gz/<ref> (testes do caminho padrao)
+    if (/^\/[^/]+\/[^/]+\/tar.gz\/[^/]+$/.test(pathname)) {
+      res.writeHead(200, { 'content-type': 'application/gzip' });
+      return res.end(fs.readFileSync(path.join(root, 'repo.tar.gz')));
+    }
     res.writeHead(404, { 'content-type': 'text/plain' });
     res.end('not found');
   } catch (err) {
