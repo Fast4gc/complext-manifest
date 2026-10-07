@@ -1,5 +1,5 @@
 import { isValidAppId } from '../validate.js';
-import { ApiError, BOT_MESSAGES } from './apiClient.js';
+import { ApiError } from './apiClient.js';
 
 /**
  * Fluxo do comando /manifest, sem depender do Discord (testavel isoladamente).

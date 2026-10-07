@@ -42,5 +42,7 @@ export const KEY_FORMAT = /^mk_[A-Za-z0-9]{32}$/;
 /** Nome de arquivo seguro para o ZIP (sem diretorios). */
 export function safeBaseName(p) {
   const base = p.split('/').pop() || '';
-  return base.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 200) || 'arquivo';
+  const clean = base.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 200);
+  if (!clean || clean === '.' || clean === '..') return 'arquivo';
+  return clean;
 }

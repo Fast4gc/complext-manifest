@@ -6,7 +6,10 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "node --watch src/server.js"
+    "bot": "node src/bot/index.js",
+    "dev": "node --watch src/server.js",
+    "key": "node src/cli.js",
+    "test": "node --test tests/"
   },
   "engines": {
     "node": ">=20"
