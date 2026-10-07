@@ -1,0 +1,48 @@
+# Nome do projeto Compose (usado pelo instalador/desinstalador)
+name: manifest-gate
+
+services:
+  api:
+    build: .
+    image: manifest-gate:latest
+    env_file: .env
+    environment:
+      # Dentro do container a API escuta em todas as interfaces;
+      # a porta publicada abaixo so e acessivel em 127.0.0.1 do host.
+      HOST: 0.0.0.0
+      DATA_DIR: /app/data
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Perfis: só sobe com `--profile discord` ou COMPOSE_PROFILES=discord
+  bot:
+    profiles: ["discord"]
+    build: .
+    image: manifest-gate:latest
+    command: ["node", "src/bot/index.js"]
+    env_file: .env
+    environment:
+      DATA_DIR: /app/data
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

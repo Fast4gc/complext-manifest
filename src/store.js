@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { config } from './config.js';
 
 const DATA_DIR = process.env.DATA_DIR || path.resolve('data');
 const KEYS_FILE = path.join(DATA_DIR, 'keys.json');
@@ -32,7 +33,12 @@ function hash(value) {
  * Cria uma chave. A chave em texto só é retornada uma vez;
  * em seguida apenas o hash fica armazenado.
  */
-export function createKey({ name = '', expiresAt = null, maxUses = null, rateLimitPerMinute = 60 } = {}) {
+export function createKey({
+  name = '',
+  expiresAt = null,
+  maxUses = null,
+  rateLimitPerMinute = config.limits.defaultRatePerMinute,
+} = {}) {
   const raw = 'mk_' + crypto.randomBytes(16).toString('hex').slice(0, 32);
   const keys = load();
   const record = {

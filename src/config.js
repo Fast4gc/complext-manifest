@@ -1,0 +1,106 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
+/**
+ * Carrega .env (se existir) sem sobrescrever variáveis já presentes no ambiente.
+ * Feito à mão para não depender de pacotes externos.
+ */
+function loadDotEnv(file) {
+  if (!fs.existsSync(file)) return;
+  const raw = fs.readFileSync(file, 'utf8');
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq === -1) continue;
+    const key = trimmed.slice(0, eq).trim();
+    let value = trimmed.slice(eq + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    if (!(key in process.env)) process.env[key] = value;
+  }
+}
+
+loadDotEnv(process.env.ENV_FILE || path.resolve('.env'));
+
+const num = (value, fallback) => {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+};
+
+function dir(base, value, fallback) {
+  return path.resolve(base, value || fallback);
+}
+
+const PROJECT_ROOT = path.resolve('.') || process.cwd();
+
+export const config = {
+  port: num(process.env.PORT, 3000),
+  /**
+   * Interface de escuta. Padrao local (127.0.0.1); o Docker Compose sobrescreve
+   * para 0.0.0.0 dentro do container, publicando a porta so em 127.0.0.1 do host.
+   */
+  host: process.env.HOST || '127.0.0.1',
+
+  /** Segredo das rotas /admin/*. Vazio => rotas admin desabilitadas (503). */
+  adminToken: process.env.ADMIN_TOKEN || '',
+
+  /** Onde chaves e cache são gravados (bind mount no Docker). */
+  dataDir: dir(PROJECT_ROOT, process.env.DATA_DIR, 'data'),
+  cacheDir: dir(
+    PROJECT_ROOT,
+    process.env.CACHE_DIR,
+    path.join(process.env.DATA_DIR || 'data', 'cache'),
+  ),
+
+  /** Origem dos arquivos: repositório GitHub com uma branch por AppID. */
+  github: {
+    repository: (process.env.GITHUB_REPOSITORY || '').trim(),
+    token: (process.env.GITHUB_TOKEN || '').trim(),
+    apiUrl: (process.env.GITHUB_API_URL || 'https://api.github.com').replace(/\/+$/, ''),
+    /** Nome da branch para um AppID. {appid} é substituído. */
+    branchTemplate: process.env.BRANCH_TEMPLATE || '{appid}',
+    timeoutMs: num(process.env.REQUEST_TIMEOUT_MS, 15_000),
+  },
+
+  cache: {
+    /** Idade máxima de uma entrada antes de checar o commit no GitHub. */
+    ttlSeconds: num(process.env.CACHE_TTL_SECONDS, 300),
+    /**
+     * Se o GitHub estiver indisponível, aceita cache desta idade como stale.
+     * Depois disso a API responde erro em vez de servir conteúdo velho.
+     */
+    staleMaxSeconds: num(process.env.CACHE_STALE_MAX_SECONDS, 7 * 24 * 3600),
+  },
+
+  limits: {
+    /** Tamanho máximo de um arquivo individual baixado. */
+    maxFileBytes: num(process.env.MAX_FILE_BYTES, 50 * 1024 * 1024),
+    /** Tamanho máximo do ZIP servido. */
+    maxZipBytes: num(process.env.MAX_ZIP_BYTES, 200 * 1024 * 1024),
+    /** Requisições por minuto por chave de API. */
+    defaultRatePerMinute: num(process.env.DEFAULT_RATE_PER_MINUTE, 60),
+  },
+
+  /** Somente esta extensão é listada/entregue. Fixo no código de propósito. */
+  allowedExtension: '.manifest',
+
+  discord: {
+    token: (process.env.DISCORD_TOKEN || '').trim(),
+    guildId: (process.env.DISCORD_GUILD_ID || '').trim(),
+    /** Chave de API usada pelo bot para falar com a própria API. */
+    apiKey: (process.env.DISCORD_API_KEY || '').trim(),
+    apiUrl: (process.env.DISCORD_API_URL || 'http://localhost:3000').replace(/\/+$/, ''),
+    cooldownSeconds: num(process.env.DISCORD_COOLDOWN_SECONDS, 30),
+    /** Limite de anexo do Discord (8 MB em servidores sem boost). */
+    maxFileMb: num(process.env.DISCORD_MAX_FILE_MB, 8),
+    timeoutMs: num(process.env.DISCORD_TIMEOUT_MS, 30_000),
+  },
+};
+
+export const PROJECT_NAME = 'manifest-gate';
+export { PROJECT_ROOT };
