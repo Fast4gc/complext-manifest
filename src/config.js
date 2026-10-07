@@ -32,6 +32,23 @@ const num = (value, fallback) => {
   return Number.isFinite(n) && n >= 0 ? n : fallback;
 };
 
+/** true/false a partir de env; qualquer outro valor cai no padrao. */
+function bool(value, fallback) {
+  const s = String(value ?? '').trim().toLowerCase();
+  if (s === 'true' || s === '1' || s === 'yes' || s === 'on') return true;
+  if (s === 'false' || s === '0' || s === 'no' || s === 'off') return false;
+  return fallback;
+}
+
+/** Lista separada por virgulas, sem vazios, preservando a ordem. */
+function list(value, fallback) {
+  const items = String(value ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return items.length > 0 ? items : fallback;
+}
+
 function dir(base, value, fallback) {
   return path.resolve(base, value || fallback);
 }
@@ -75,6 +92,58 @@ export const config = {
      * Depois disso a API responde erro em vez de servir conteúdo velho.
      */
     staleMaxSeconds: num(process.env.CACHE_STALE_MAX_SECONDS, 7 * 24 * 3600),
+    /**
+     * Teto de disco do cache (bytes). Apos gravar uma entrada, entradas
+     * menos usadas sao removidas ate caber. 0 = sem teto.
+     */
+    maxBytes: num(process.env.CACHE_MAX_BYTES, 5 * 1024 * 1024 * 1024),
+  },
+
+  /**
+   * Fontes de manifests, em ordem de prioridade (a primeira que responder
+   * com sucesso vence). `source=<id>` na consulta escolhe uma explicitamente.
+   *
+   * IDs conhecidos:
+   *   manifesthub  steamtoolsapp/ManifestHub (publico, uma branch por AppID)
+   *   github       GITHUB_REPOSITORY configurado pelo operador
+   *   steamtools   steamtoolsapp.com (API publica documentada, opt-in)
+   */
+  sources: {
+    priority: list(process.env.SOURCE_PRIORITY, ['manifesthub', 'github']),
+    /** Projeto do ManifestHub; sobrescrevel para um fork proprio. */
+    manifesthub: {
+      repository: (process.env.MANIFESTHUB_REPOSITORY || 'steamtoolsapp/ManifestHub').trim(),
+      branchTemplate: process.env.MANIFESTHUB_BRANCH_TEMPLATE || '{appid}',
+      enabled: bool(process.env.MANIFESTHUB_ENABLED, true),
+    },
+    /** github ja vem de config.github (GITHUB_REPOSITORY). */
+    github: {
+      enabled: bool(process.env.GITHUB_SOURCE_ENABLED, true),
+    },
+    /**
+     * API publica de terceiros (opt-in): nenhum token proprio e necessario,
+     * mas ela tem rate limit proprio (1 req/1.5s por IP em /generate).
+     */
+    steamtools: {
+      enabled: bool(process.env.STEAMTOOLS_ENABLED, false),
+      baseUrl: (process.env.STEAMTOOLS_API_URL || 'https://steamtoolsapp.com').replace(/\/+$/, ''),
+      timeoutMs: num(process.env.STEAMTOOLS_TIMEOUT_MS, 20_000),
+    },
+  },
+
+  /**
+   * Pesquisa por nome de jogo -> AppID. Fonte publica verificada:
+   * a loja da Steam (storesearch) nao exige token nem cadastro.
+   */
+  search: {
+    enabled: bool(process.env.SEARCH_ENABLED, true),
+    /** `term` e a query; resposta { total, items: [{ type, name, id }] }. */
+    storeApiUrl: (process.env.STEAM_STORE_API_URL || 'https://store.steampowered.com/api').replace(/\/+$/, ''),
+    timeoutMs: num(process.env.SEARCH_TIMEOUT_MS, 10_000),
+    /** Resultados por resposta (a loja devolve no maximo ~10). */
+    limit: Math.max(1, num(process.env.SEARCH_LIMIT, 10)),
+    /** Cache em memoria de resultados por termo (evita martelar a loja). */
+    ttlSeconds: num(process.env.SEARCH_TTL_SECONDS, 600),
   },
 
   limits: {

@@ -3,8 +3,16 @@ import { config } from './config.js';
 import { branchNameFor, isSafeRepoPath, safeBaseName } from './validate.js';
 
 /**
- * Erros tipados da origem GitHub. `code` vira a mensagem clara da API.
+ * Transporte HTTP para repositorios GitHub com uma branch por AppID.
+ *
+ * Todas as funcoes aceitam `src` (configuracao de uma fonte). Sem `src`,
+ * usam `config.github` (a fonte `github` do operador) — o que mantem
+ * compativel quem so passa o AppID.
+ *
+ * Um "src" e um objeto simples:
+ *   { id, repository, branchTemplate, token, apiUrl, timeoutMs }
  */
+
 export class SourceError extends Error {
   constructor(code, message, detail = undefined) {
     super(message);
@@ -29,14 +37,38 @@ export const ERROR_MESSAGES = {
   github_timeout: 'Tempo esgotado ao consultar o GitHub',
   github_indisponivel: 'GitHub indisponivel no momento',
   github_rate_limit: 'Limite de requisicoes do GitHub atingido, tente mais tarde',
+  github_auth: 'GitHub recusou as credenciais (GITHUB_TOKEN invalido ou sem permissao)',
   github_erro: 'Erro inesperado ao consultar o GitHub',
   cache_indisponivel: 'Cache local indisponivel e o GitHub nao respondeu',
   falha_integridade: 'Falha de integridade ao baixar manifesto',
   caminho_invalido: 'Caminho de arquivo rejeitado',
 };
 
-function repository() {
-  const repo = config.github.repository;
+/** Normaliza um src parcial usando config.github como padrao. */
+export function resolveSrc(src) {
+  const base = config.github;
+  if (!src) {
+    return {
+      id: 'github',
+      repository: base.repository,
+      branchTemplate: base.branchTemplate,
+      token: base.token,
+      apiUrl: base.apiUrl,
+      timeoutMs: base.timeoutMs,
+    };
+  }
+  return {
+    id: src.id || 'github',
+    repository: src.repository ?? base.repository,
+    branchTemplate: src.branchTemplate ?? base.branchTemplate,
+    token: src.token ?? base.token,
+    apiUrl: (src.apiUrl ?? base.apiUrl).replace(/\/+$/, ''),
+    timeoutMs: src.timeoutMs ?? base.timeoutMs,
+  };
+}
+
+function repositoryOf(src) {
+  const repo = src.repository;
   if (!repo) throw new SourceError('repositorio_nao_configurado', ERROR_MESSAGES.repositorio_nao_configurado);
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) {
     throw new SourceError('repositorio_invalido', ERROR_MESSAGES.repositorio_invalido);
@@ -45,28 +77,26 @@ function repository() {
 }
 
 /** Headers da API do GitHub. O token nunca aparece em logs ou erros. */
-function headers(raw = false) {
+function headersOf(src, raw = false) {
   const h = {
     'User-Agent': 'manifest-gate',
-    Accept: raw
-      ? 'application/vnd.github.raw+json'
-      : 'application/vnd.github+json',
+    Accept: raw ? 'application/vnd.github.raw+json' : 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28',
   };
-  if (config.github.token) h.Authorization = `Bearer ${config.github.token}`;
+  if (src.token) h.Authorization = `Bearer ${src.token}`;
   return h;
 }
 
-/** GET com timeout, mapeando falhas e limites do GitHub para SourceError. */
-async function ghGet(pathname, { raw = false, signal } = {}) {
-  const url = `${config.github.apiUrl}${pathname}`;
+/** GET com timeout, mapeando falhas, limites e auth para SourceError. */
+async function ghGet(src, pathname, { raw = false, signal } = {}) {
+  const url = `${src.apiUrl}${pathname}`;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), config.github.timeoutMs);
+  const timer = setTimeout(() => controller.abort(), src.timeoutMs);
   const onAbort = () => controller.abort();
   signal?.addEventListener('abort', onAbort, { once: true });
   let res;
   try {
-    res = await fetch(url, { headers: headers(raw), signal: controller.signal });
+    res = await fetch(url, { headers: headersOf(src, raw), signal: controller.signal });
   } catch (err) {
     if (signal?.aborted) throw err;
     if (controller.signal.aborted) {
@@ -79,15 +109,23 @@ async function ghGet(pathname, { raw = false, signal } = {}) {
   }
 
   if (res.status === 404) return { status: 404, res };
-  if (res.status === 403 || res.status === 429) {
+  if (res.status === 401 || res.status === 403) {
+    // 403 sem esgotamento de cota = credencial recusada (SSO, escopo, token
+    // invalido). Nao confundir com rate limit: o usuario precisa saber.
     const remaining = res.headers.get('x-ratelimit-remaining');
-    const reset = res.headers.get('x-ratelimit-reset');
-    if (res.status === 429 || remaining === '0') {
+    if (res.status === 403 && remaining === '0') {
+      const reset = res.headers.get('x-ratelimit-reset');
       throw new SourceError('github_rate_limit', ERROR_MESSAGES.github_rate_limit, {
         reset: reset ? new Date(Number(reset) * 1000).toISOString() : undefined,
       });
     }
-    throw new SourceError('github_indisponivel', ERROR_MESSAGES.github_indisponivel, 'http 403');
+    throw new SourceError('github_auth', ERROR_MESSAGES.github_auth, `http ${res.status}`);
+  }
+  if (res.status === 429) {
+    const reset = res.headers.get('x-ratelimit-reset');
+    throw new SourceError('github_rate_limit', ERROR_MESSAGES.github_rate_limit, {
+      reset: reset ? new Date(Number(reset) * 1000).toISOString() : undefined,
+    });
   }
   if (!res.ok) {
     throw new SourceError('github_erro', ERROR_MESSAGES.github_erro, `http ${res.status}`);
@@ -106,17 +144,16 @@ export function sha256(buffer) {
 }
 
 /** Consulta direta da branch do AppID, sem listar branches do repositorio. */
-export async function branchHead(appid, { signal } = {}) {
-  const repo = repository();
-  const branch = branchNameFor(appid, config.github.branchTemplate);
+export async function branchHead(appid, { signal, src } = {}) {
+  const s = resolveSrc(src);
+  const repo = repositoryOf(s);
+  const branch = branchNameFor(appid, s.branchTemplate);
   if (!branch) throw new SourceError('branch_invalida', ERROR_MESSAGES.branch_invalida);
 
   const enc = encodeURIComponent(branch);
-  const { status, res } = await ghGet(`/repos/${repo}/branches/${enc}`, { signal });
+  const { status, res } = await ghGet(s, `/repos/${repo}/branches/${enc}`, { signal });
   if (status === 404) {
-    throw new SourceError('branch_nao_encontrada', ERROR_MESSAGES.branch_nao_encontrada, {
-      branch,
-    });
+    throw new SourceError('branch_nao_encontrada', ERROR_MESSAGES.branch_nao_encontrada, { branch });
   }
   const body = await res.json().catch(() => null);
   const sha = body?.commit?.sha;
@@ -126,10 +163,12 @@ export async function branchHead(appid, { signal } = {}) {
   return { branch, sha };
 }
 
-/** Lista os .manifest da branch (arvore recursiva no commit informado). */
-export async function listManifestsAt(appid, sha, { signal } = {}) {
-  const repo = repository();
+/** Lista os arquivos entregaveis da branch (arvore recursiva no commit). */
+export async function listManifestsAt(appid, sha, { signal, src } = {}) {
+  const s = resolveSrc(src);
+  const repo = repositoryOf(s);
   const { status, res } = await ghGet(
+    s,
     `/repos/${repo}/git/trees/${encodeURIComponent(sha)}?recursive=1`,
     { signal },
   );
@@ -157,8 +196,9 @@ export async function listManifestsAt(appid, sha, { signal } = {}) {
 }
 
 /** Baixa um arquivo do repositorio no commit informado, validando integridade. */
-export async function fetchFile(appid, file, sha, { signal } = {}) {
-  const repo = repository();
+export async function fetchFile(appid, file, sha, { signal, src } = {}) {
+  const s = resolveSrc(src);
+  const repo = repositoryOf(s);
   if (!isSafeRepoPath(file.path)) {
     throw new SourceError('caminho_invalido', ERROR_MESSAGES.caminho_invalido);
   }
@@ -168,7 +208,7 @@ export async function fetchFile(appid, file, sha, { signal } = {}) {
   const pathname =
     `/repos/${repo}/contents/${file.path.split('/').map(encodeURIComponent).join('/')}` +
     `?ref=${encodeURIComponent(sha)}`;
-  const { status, res } = await ghGet(pathname, { raw: true, signal });
+  const { status, res } = await ghGet(s, pathname, { raw: true, signal });
   if (status === 404) {
     throw new SourceError('arquivo_nao_encontrado', ERROR_MESSAGES.arquivo_nao_encontrado, file.name);
   }
@@ -195,8 +235,8 @@ export async function fetchFile(appid, file, sha, { signal } = {}) {
 }
 
 /** Verifica de passagem se o GitHub responde (usado pelo health check profundo). */
-export async function ping() {
+export async function ping({ src } = {}) {
   const started = Date.now();
-  await ghGet('/rate_limit');
+  await ghGet(resolveSrc(src), '/rate_limit');
   return { ok: true, latencyMs: Date.now() - started };
 }
