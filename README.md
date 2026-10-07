@@ -23,6 +23,43 @@ entrega em ZIP.
 
 ## Instalação (Ubuntu/Debian)
 
+### Rápida, com curl ou wget
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Fast4gc/complext-manifest/main/bootstrap.sh | bash
+# ou
+wget -qO- https://raw.githubusercontent.com/Fast4gc/complext-manifest/main/bootstrap.sh | bash
+```
+
+> O código precisa estar publicado nesse repositório GitHub (faça push do
+> projeto). O bootstrap baixa o código para `./manifest-gate` (ou para a pasta
+> atual, se estiver vazia) e executa o `install.sh`. Os prompts continuam
+> funcionando via `/dev/tty`, mesmo com stdin sendo um pipe.
+
+Opções (com `bash -s --`):
+
+```bash
+curl -fsSL .../bootstrap.sh | bash -s -- --with-discord      # API + bot
+curl -fsSL .../bootstrap.sh | bash -s -- --api-only          # só a API
+curl -fsSL .../bootstrap.sh | bash -s -- --dir ~/manifest-gate
+curl -fsSL .../bootstrap.sh | bash -s -- --update            # atualiza código e reinstala
+curl -fsSL .../bootstrap.sh | bash -s -- --no-exec           # só baixa o código
+curl -fsSL .../bootstrap.sh | bash -s -- --repo usuario/outro-repo --ref main
+```
+
+Segurança do bootstrap: só aceita URLs `https` (o `http` é aceito apenas para
+`127.0.0.1`/`localhost`, em testes), recusa pastas que não são deste projeto e
+nunca sobrescreve `.env` ou `./data`. Para revisar antes de rodar:
+
+```bash
+curl -fsSL .../bootstrap.sh -o bootstrap.sh && less bootstrap.sh && bash bootstrap.sh
+```
+
+Repositório privado? Clone manualmente e rode `./install.sh install` dentro da
+pasta.
+
+### Instalação a partir da pasta do projeto
+
 ```bash
 ./install.sh install                # pergunta: só API ou API + Discord
 ./install.sh install --api-only     # somente a API
@@ -31,7 +68,8 @@ entrega em ZIP.
 
 O instalador:
 
-- roda **desta pasta** (não copia o projeto para outro lugar);
+- roda **desta pasta** (não copia o projeto para outro lugar) — o mesmo vale
+  após o bootstrap, que só baixa o código para a pasta de destino;
 - reutiliza Docker/Compose já instalados; se faltarem, instala via `apt`
   (com `sudo`, se disponível);
 - gera `ADMIN_TOKEN` automaticamente e, no modo Discord, gera a chave da API do
@@ -257,8 +295,9 @@ npm test
 Cobre: validação (AppID, caminho, branch, chave), cache (TTL, invalidação por
 commit, stale, reparo de integridade, limites), API (autenticação, ZIP, rate
 limit, erros do GitHub, admin), bot (cooldown, fluxo, cliente HTTP, vazamento
-de credenciais), instalador/desinstalador (em pastas temporárias com Docker
-simulado) e uma consulta real à API do GitHub.
+de credencial), instalador/desinstalador e bootstrap `curl | bash` (em pastas
+temporárias com Docker simulado e servidor local), incluindo recusa em pasta
+alheia e `--purge`, e uma consulta real à API do GitHub.
 
 ## Limites conhecidos
 

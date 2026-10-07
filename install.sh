@@ -143,10 +143,17 @@ env_ensure() {  # env_ensure CHAVE VALOR_PADRAO  (so preenche se vazio)
   if [ -z "$current" ]; then env_set "$1" "$2"; fi
 }
 
+# Com `curl | bash` o stdin e um pipe (sem terminal); usamos /dev/tty quando
+# existir, para os prompts continuarem funcionando sem consumir o script.
+can_use_tty() { [ -e /dev/tty ] && { : < /dev/tty; } 2>/dev/null; }
+
 prompt_secret() {  # prompt_secret "texto"  -> imprime valor (sem eco) ou vazio
   local value=""
   if [ -t 0 ]; then
     read -r -s -p "$1" value
+    printf '\n' >&2
+  elif can_use_tty; then
+    read -r -s -p "$1" value < /dev/tty
     printf '\n' >&2
   fi
   printf '%s' "$value"
@@ -156,6 +163,8 @@ prompt_line() {  # prompt_line "texto"
   local value=""
   if [ -t 0 ]; then
     read -r -p "$1" value
+  elif can_use_tty; then
+    read -r -p "$1" value < /dev/tty
   fi
   printf '%s' "$value"
 }
@@ -241,11 +250,11 @@ cmd_install() {
     INSTALL_MODE="api"
   elif [ "${1:-}" = "--with-discord" ]; then
     INSTALL_MODE="discord"
-  elif [ -t 0 ]; then
+  elif [ -t 0 ] || can_use_tty; then
     echo "O que voce quer instalar?"
     echo "  1) somente a API"
     echo "  2) API + bot do Discord"
-    read -r -p '> ' choice
+    if [ -t 0 ]; then read -r -p '> ' choice; else read -r -p '> ' choice < /dev/tty; fi
     case "$choice" in
       2) INSTALL_MODE="discord" ;;
       *) INSTALL_MODE="api" ;;
