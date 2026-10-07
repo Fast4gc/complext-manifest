@@ -53,26 +53,36 @@ ensure_docker_daemon() {
     log "iniciando o daemon Docker..."
     $SUDO systemctl enable --now docker >/dev/null 2>&1 || true
   fi
-  docker info >/dev/null 2>&1 ||
-    warn "daemon Docker nao respondeu; rode 'sudo systemctl start docker' depois."
+  if docker info >/dev/null 2>&1; then return 0; fi
+  die "daemon Docker nao respondeu. Rode:
+    sudo systemctl start docker
+  e confirme com: sudo systemctl status docker"
 }
 
 # Checa acesso ao daemon com mensagem acionavel (o erro cru do Compose
 # e apenas "permission denied", sem dizer como resolver).
+# Retorna 0 quando o problema nao e de permissoes (ex.: daemon parado).
 ensure_docker_access() {
-  if docker info >/dev/null 2>&1; then return 0; fi
-  local msg="sem acesso ao daemon Docker (permission denied em /var/run/docker.sock)"
+  local err
+  err="$(docker info 2>&1 >/dev/null || true)"
+  if [ -z "$err" ]; then return 0; fi
+  case "$err" in
+    *"permission denied"*) ;;
+    *) return 0 ;;  # outro erro: trata em ensure_docker_daemon
+  esac
   if [ "$(id -u)" -ne 0 ] &&
      getent group docker >/dev/null 2>&1 &&
      ! id -nG | tr ' ' '\n' | grep -qx docker; then
-    die "$msg.
-  Corrija colocando o usuario no grupo docker:
+    die "$err
+[instalador] ERRO: usuario '$USER' nao esta no grupo docker.
+  Corrija com:
     sudo usermod -aG docker $USER
   Depois SAIA e entre de novo (ou rode: newgrp docker)
   e confirme com: docker info"
   fi
-  die "$msg. Rode o instalador com sudo ou peca ao administrador
-  para colocar $USER no grupo docker."
+  die "$err
+[instalador] ERRO: sem acesso ao socket do Docker. Rode o instalador
+  com sudo ou peca ao administrador para colocar $USER no grupo docker."
 }
 
 # Compose (Bake) precisa do plugin buildx para buildar imagens.
@@ -307,11 +317,13 @@ cmd_install() {
   else
     log "Docker e Compose ja instalados, reutilizando."
   fi
+
+  # Ordem: acesso (socket) -> daemon -> builder (buildx).
+  ensure_docker_access
   ensure_docker_daemon
 
   setup_env
 
-  ensure_docker_access
   ensure_builder
 
   log "construindo imagens..."

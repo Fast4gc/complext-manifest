@@ -22,12 +22,14 @@ function makeProject() {
 
 /** Stub do docker: registra os argumentos e simula sucesso/CLI de chaves. */
 /** Stub do docker: registra os argumentos e simula sucesso/CLI de chaves.
- *  mode: 'ok' (padrao) | 'no-info' (socket negado) | 'no-buildx' */
+ *  mode: 'ok' (padrao) | 'no-info' (socket negado) | 'daemon-down' | 'no-buildx' */
 function makeStubBin(dir, mode = 'ok') {
   const bin = path.join(dir, 'stub-bin');
   fs.mkdirSync(bin, { recursive: true });
   const extra = {
-    'no-info': `  "info"*) exit 1 ;;
+    'no-info': `  "info"*) echo "permission denied" >&2; exit 1 ;;
+`,
+    'daemon-down': `  "info"*) echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?" >&2; exit 1 ;;
 `,
     'no-buildx': `  "buildx version"*) exit 1 ;;
 `,
@@ -203,6 +205,16 @@ test('acesso negado ao Docker: mensagem com usermod', () => {
   assert.match(res.stderr, /permission denied/);
   assert.match(res.stderr, /grupo docker/);
   assert.match(res.stderr, /usermod/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('daemon parado: mensagem de systemctl start', () => {
+  const dir = makeProject();
+  const bin = makeStubBin(dir, 'daemon-down');
+  const res = runScript(dir, bin, 'install.sh', ['install', '--api-only']);
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /daemon Docker nao respondeu/);
+  assert.match(res.stderr, /systemctl start docker/);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
