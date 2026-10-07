@@ -42,6 +42,10 @@ test.beforeEach(() => {
   });
 });
 
+test.after(async () => {
+  await gh.close();
+});
+
 test('primeiro acesso baixa do GitHub e persiste no cache', async () => {
   const meta = await getManifests(APPID);
   assert.equal(meta.cached, false);
@@ -108,7 +112,7 @@ test('GitHub indisponivel: serve cache stale dentro do limite', async () => {
   assert.equal(meta.stale, true);
   assert.equal(meta.cached, true);
   assert.equal(meta.files.length, 2, 'conteudo antigo preservado');
-  assert.equal(gh.calls.branches, 1);
+  assert.equal(gh.calls.trees, 0, 'nao tentou baixar arvore nova');
 });
 
 test('GitHub fora do ar sem cache: erro claro', async () => {

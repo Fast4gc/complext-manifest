@@ -118,7 +118,11 @@ export async function startMockGitHub({ branch = '123456', commit = 'a'.repeat(4
       state.calls.trees = 0;
       state.calls.contents = 0;
     },
-    close: () => new Promise((r) => server.close(r)),
+    close: () =>
+      new Promise((r) => {
+        server.closeAllConnections?.();
+        server.close(r);
+      }),
   };
 }
 

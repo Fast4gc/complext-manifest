@@ -47,6 +47,7 @@ test.beforeEach(() => {
 });
 
 test.after(async () => {
+  server.closeAllConnections?.();
   await new Promise((r) => server.close(r));
   await gh.close();
 });
@@ -168,7 +169,8 @@ test('header X-API-Key tambem autentica', async () => {
 });
 
 test('branch inexistente: 404 com mensagem clara', async () => {
-  gh.setBranch('999999');
+  // A branch '999998' existe; pedimos o AppID 999999 (branch inexistente).
+  gh.setBranch('999998');
   const res = await get(`/manifests?id=999999&key=${KEY}`);
   assert.equal(res.status, 404);
   assert.equal(res.body.error, 'branch_nao_encontrada');

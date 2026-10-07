@@ -9,7 +9,7 @@ import path from 'node:path';
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mg-live-test-'));
 process.env.DATA_DIR = tmp;
 process.env.GITHUB_REPOSITORY = 'expressjs/express';
-process.env.BRANCH_TEMPLATE = 'main';
+process.env.BRANCH_TEMPLATE = 'master';
 delete process.env.GITHUB_TOKEN;
 delete process.env.GITHUB_API_URL;
 
@@ -29,7 +29,7 @@ test('consulta real a API do GitHub: branch, arvore e filtro de manifests', asyn
     throw err;
   }
 
-  assert.equal(head.branch, 'main');
+  assert.equal(head.branch, 'master');
   assert.match(head.sha, /^[0-9a-f]{40}$/);
 
   const { files, truncated } = await listManifestsAt('1', head.sha);

@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { config } from './config.js';
 import {
   SourceError,
@@ -81,14 +82,11 @@ function verifyCachedFile(appid, file) {
   const full = cachedFilePath(appid, file.name);
   try {
     const stat = fs.statSync(full);
-    if (!stat.isFile()) return false;
-    if (stat.size !== file.size) return false;
-    const fd = fs.openSync(full, 'r');
-    try {
-      const buf = Buffer.alloc(Math.min(64, file.size));
-      fs.readSync(fd, buf, 0, buf.length, 0);
-    } finally {
-      fs.closeSync(fd);
+    if (!stat.isFile() || stat.size !== file.size) return false;
+    // Integridade completa quando temos o sha256 registrado na meta.
+    if (file.sha256) {
+      const actual = crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex');
+      if (actual !== file.sha256) return false;
     }
     return true;
   } catch {
@@ -114,14 +112,14 @@ async function ensureFiles(appid, meta, { signal } = {}) {
 }
 
 /** Baixa a lista do GitHub e monta a entrada de cache. */
-async function buildEntry(appid, { signal } = {}) {
-  const head = await branchHead(appid, { signal });
-  const { files, truncated } = await listManifestsAt(appid, head.sha, { signal });
+async function buildEntry(appid, { head, signal } = {}) {
+  const resolved = head ?? (await branchHead(appid, { signal }));
+  const { files, truncated } = await listManifestsAt(appid, resolved.sha, { signal });
 
   if (files.length === 0) {
     clearEntry(appid);
     const err = new SourceError('sem_manifests', ERROR_MESSAGES.sem_manifests, {
-      branch: head.branch,
+      branch: resolved.branch,
       truncated: truncated || undefined,
     });
     throw err;
@@ -138,8 +136,8 @@ async function buildEntry(appid, { signal } = {}) {
 
   const meta = {
     appid,
-    branch: head.branch,
-    commit: head.sha,
+    branch: resolved.branch,
+    commit: resolved.sha,
     fetchedAt: new Date().toISOString(),
     checkedAt: new Date().toISOString(),
     stale: false,
@@ -150,7 +148,7 @@ async function buildEntry(appid, { signal } = {}) {
 
   // Baixa conteudo antes de gravar meta: entrada incompleta nunca e publicada.
   for (const file of meta.files) {
-    const { buffer, sha256 } = await fetchFile(appid, file, head.sha, { signal });
+    const { buffer, sha256 } = await fetchFile(appid, file, resolved.sha, { signal });
     fs.mkdirSync(filesDir(appid), { recursive: true });
     const tmp = cachedFilePath(appid, file.name) + '.tmp';
     fs.writeFileSync(tmp, buffer);
@@ -165,7 +163,7 @@ async function buildEntry(appid, { signal } = {}) {
 
 async function withLock(appid, fn) {
   if (inflight.has(appid)) return inflight.get(appid);
-  const p = (async () => fn()).finally(() => inflight.delete(appid));
+  const p = (async () => fn())().finally(() => inflight.delete(appid));
   inflight.set(appid, p);
   return p;
 }
@@ -201,7 +199,7 @@ export async function getManifests(appid, { refresh = false, signal } = {}) {
       }
 
       // 2b. Commit mudou (ou primeiro acesso): invalida e reconstrói.
-      const built = await buildEntry(appid, { signal });
+      const built = await buildEntry(appid, { head, signal });
       return { ...built, cached: false, stale: false };
     } catch (err) {
       // 3. GitHub fora do ar: serve cache velho enquanto estiver dentro do limite.

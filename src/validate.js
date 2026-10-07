@@ -31,7 +31,8 @@ export function isSafeRepoPath(p) {
 
 /** Nome de branch resultante do template, com charset restrito. */
 export function branchNameFor(appid, template = '{appid}') {
-  const branch = template.replaceAll('{appid}', appid);
+  if (!isValidAppId(appid)) return null;
+  const branch = template.replaceAll('{appid}', String(appid).trim());
   if (!/^[\w./-]{1,240}$/.test(branch) || branch.includes('..')) return null;
   return branch;
 }

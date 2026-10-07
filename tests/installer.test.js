@@ -136,10 +136,9 @@ test('install --with-discord: exige token do Discord', () => {
 test('install --with-discord: gera chave da API do bot sem exibi-la', () => {
   const dir = makeProject();
   const bin = makeStubBin(dir);
-  // Pre-semente credenciais (nao-interativo nao ha prompt).
+  // Pre-semente credenciais (no modo nao-interativo nao ha prompt).
   const envFile = path.join(dir, '.env');
-  let raw = fs.readFileSync(envFile, 'utf8');
-  fs.writeFileSync(envFile, raw);
+  const raw = fs.readFileSync(path.join(dir, '.env.example'), 'utf8');
   fs.writeFileSync(
     envFile,
     raw

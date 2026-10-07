@@ -42,7 +42,7 @@ export async function runManifestCommand({ appid, api, cooldown, userId, maxByte
         `O pacote do AppID **${appid}** tem **${list.count}** arquivo(s), ` +
         `**${(list.totalBytes / (1024 * 1024)).toFixed(1)} MB** e ficou com ${mb} MB, ` +
         `acima do limite de anexo do Discord (${limitMb} MB). ` +
-        `Use a API direto: \`GET /download?id=${appid}\`.',
+        `Use a API direto: \`GET /download?id=${appid}\`.`,
     };
   }
 
