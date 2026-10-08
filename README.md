@@ -1,21 +1,53 @@
 # Manifest Gate
 
-API + bot do Discord que buscam arquivos `.manifest` em um repositório GitHub
-com **uma branch por AppID**, com cache persistente, autenticação por chave e
-entrega em ZIP.
+API + bot do Discord que buscam arquivos `.manifest` em repositórios GitHub
+com **uma branch por AppID**, com cache persistente, autenticação por chave,
+busca por nome de jogo e entrega em ZIP.
 
 > **Escopo permitido de arquivos:** apenas `.manifest` (fixo no código).
-> Arquivos de chave (`.lua`, `depotkeys.json` etc.) **não são listados nem
-> entregues**, e o repositório é definido por você em `GITHUB_REPOSITORY`
-> (`owner/repo` do repositório que você tem permissão para distribuir).
+> `.lua`/`.json` (que carregam **chaves de depot**) são **só listados**, com
+> aviso e um link direto para o repositório público — nunca baixados, nunca
+> no cache e nunca no ZIP. Arquivos de chave (`key.vdf`, `*.vdf`, `*.key`,
+> `*.acf`, `depotkeys.json`) **nem aparecem na listagem**.
+> Este serviço **não destrava licença nem mexe em DRM**: não gera manifests,
+> não gera chaves, não executa arquivo recebido.
+
+## Fontes
+
+| ID | Onde consulta | Credencial |
+|---|---|---|
+| `github` | `GITHUB_REPOSITORY` (seu repositório, branch por AppID) | `GITHUB_TOKEN` opcional |
+| `manifesthub` | `steamtoolsapp/ManifestHub` (público, ~62 mil branches) | nenhuma (API pública do GitHub) |
+
+- Ordem em `SOURCE_PRIORITY` (padrão `github,manifesthub`): a primeira que
+  responder vence, as demais só entram em falha (fallback).
+- `?source=<id>` escolhe **uma** fonte e **desliga** o fallback: o erro dela é
+  o erro da resposta. ID desconhecido → `400 fonte_desconhecida`.
+- A resposta traz `source`, `origin`, `version` (commit), `fetchedAt` e
+  `attempts` (quais fontes falharam e com qual código).
+- Erros de **autenticação** (`github_auth`) e **rate limit**
+  (`github_rate_limit`) são propagados como tais — nunca viram "fonte
+  indisponível" nem somem em silêncio.
+- **Nunca listamos todas as branches** do ManifestHub: consultamos só a branch
+  do AppID pedido.
+
+**Por que só essas duas?** *LuaTools* exige login com conta Steam (OAuth) e
+*Steam-Depot-Tools* está arquivado — sem documentação/utilização própria com
+nossa credencial, não integramos. Está documentado em vez de fingir que
+existe. Um terceiro provedor só entra se houver docs suficientes e
+credencial própria nossa.
 
 ## Componentes
 
 | Componente | Descrição |
 |---|---|
-| API (`src/server.js`) | Lista e baixa manifests por AppID, valida chaves, health check e docs |
-| Bot (`src/bot/`) | Comando `/manifest appid:` que consome a própria API e anexa o ZIP |
-| Cache (`src/cache.js`) | Persistente em `./data/cache`, compartilhado por API e bot, invalidado por commit |
+| API (`src/server.js`) | Fontes, listagem, download, busca por nome, links temporários, health, status e docs |
+| Provedores (`src/providers/`) | Contrato `availability/list/download/ping`, prioridade, fallback e registro de fontes |
+| Bot (`src/bot/`) | Comandos `/manifest` e `/busca`, consomem a própria API e anexam o ZIP |
+| Busca (`src/search.js`) | Nome → AppID pela busca pública da loja da Steam (fonte verificada, sem token) |
+| Links (`src/links.js`) | Token HMAC com expiração, sem estado no servidor |
+| Cache (`src/cache.js`) | Persistente em `./data/cache/<fonte>/<appid>`, compartilhado por API e bot |
+| ZIP (`src/zip.js`) | Validação de entradas e da política antes de servir |
 | CLI (`src/cli.js`) | Gera/revoga chaves sem subir a API (usado pelo instalador) |
 | Docker | `Dockerfile` + `docker-compose.yml` (API sempre; bot via perfil `discord`) |
 
@@ -82,37 +114,86 @@ O instalador:
 ```bash
 ./install.sh start      # sobe os serviços
 ./install.sh stop       # para
-./install.sh restart    # reinicia
+./install.sh restart    # sobe de novo com o .env atual (recria o que mudou)
 ./install.sh status     # docker compose ps + health check
 ./install.sh logs       # últimas 200 linhas  (./install.sh logs --follow)
 ./install.sh update     # git pull + rebuild + restart
 ./install.sh uninstall  # delega para uninstall.sh
 ```
 
+> Depois de editar o `.env` manualmente, use `./install.sh restart`
+> (equivalente a `docker compose --profile discord up -d`). Um simples
+> `docker compose restart` **não** reaplica as variáveis novas.
+
 ---
 
 ## Configuração (`.env`)
 
+Modelo completo e comentado: `.env.example`.
+
+### Servidor e acesso
+
 | Variável | Descrição |
 |---|---|
 | `PORT` / `HOST` | Porta e interface da API (padrão local: `127.0.0.1`) |
-| `ADMIN_TOKEN` | Segredo das rotas `/admin/*` (gerado no install) |
-| `GITHUB_REPOSITORY` | **`owner/repo`** do repositório com branches por AppID |
-| `GITHUB_TOKEN` | Opcional; aumenta o limite de requisições do GitHub |
-| `GITHUB_API_URL` | Padrão `https://api.github.com` (mudar só para Enterprise/testes) |
-| `BRANCH_TEMPLATE` | Nome da branch; `{appid}` é substituído (padrão `{appid}`) |
+| `ADMIN_TOKEN` | Segredo das rotas `/admin/*` e (se `LINK_SECRET` vazio) dos links |
+| `DEFAULT_RATE_PER_MINUTE` | Rate limit por minuto, por chave (padrão 60) |
+
+### Fontes
+
+| Variável | Descrição |
+|---|---|
+| `SOURCE_PRIORITY` | Ordem de fallback (padrão `github,manifesthub`) |
+| `GITHUB_REPOSITORY` | **`owner/repo`** do seu repositório com branches por AppID. Vazio = fonte pulada |
+| `GITHUB_TOKEN` | Opcional; sobe de ~60 para ~5000 req/h |
+| `GITHUB_SOURCE_ENABLED` | `false` desliga só a fonte do operador |
+| `GITHUB_API_URL` / `GITHUB_RAW_URL` | API do GitHub e base dos links brutos |
+| `BRANCH_TEMPLATE` | Template da branch; `{appid}` é substituído (padrão `{appid}`) |
+| `MANIFESTHUB_REPOSITORY` | Padrão `steamtoolsapp/ManifestHub` |
+| `MANIFESTHUB_BRANCH_TEMPLATE` | Padrão `{appid}` |
+| `MANIFESTHUB_ENABLED` | `false` desliga a fonte pública |
+
+### Busca por nome
+
+| Variável | Descrição |
+|---|---|
+| `SEARCH_ENABLED` | `false` desliga `/search` e `/busca` (padrão `true`) |
+| `STEAM_STORE_API_URL` | Padrão `https://store.steampowered.com/api` |
+| `SEARCH_TIMEOUT_MS` / `SEARCH_LIMIT` / `SEARCH_TTL_SECONDS` | Timeout, resultados por resposta e cache em memória |
+| `SEARCH_RATE_PER_MINUTE` | Bucket próprio de rate limit, separado do da chave |
+
+### Links temporários (opcional)
+
+| Variável | Descrição |
+|---|---|
+| `PUBLIC_BASE_URL` | URL pública da API. **Sem ela o recurso fica desligado** (a API só escuta em `127.0.0.1`) |
+| `LINK_SECRET` | Segredo da assinatura HMAC (cai para `ADMIN_TOKEN` se vazio) |
+| `LINK_TTL_SECONDS` / `LINK_TTL_MAX_SECONDS` | Validade padrão (15 min) e teto (24 h); mínimo 60 s |
+
+### Cache e limites
+
+| Variável | Descrição |
+|---|---|
+| `DATA_DIR` / `CACHE_DIR` | Dados (padrão `./data`) e cache (vazio = `<DATA_DIR>/cache`) |
 | `CACHE_TTL_SECONDS` | Idade até checar o commit da branch de novo (padrão 300) |
-| `CACHE_STALE_MAX_SECONDS` | Idade máxima de cache servido com GitHub fora (padrão 7 dias) |
+| `CACHE_STALE_MAX_SECONDS` | Idade máxima de cache servido com a fonte fora (padrão 7 dias) |
+| `CACHE_MAX_BYTES` | Teto total do cache (padrão 5 GiB); estourou, sai o mais antigo |
+| `REQUEST_TIMEOUT_MS` | Timeout das chamadas às fontes (15 s) |
 | `MAX_FILE_BYTES` / `MAX_ZIP_BYTES` | Limites de tamanho (50 MB / 200 MB) |
-| `REQUEST_TIMEOUT_MS` | Timeout das chamadas ao GitHub (15 s) |
+
+### Discord
+
+| Variável | Descrição |
+|---|---|
 | `DISCORD_TOKEN` | Token do bot (Discord Developer Portal) |
-| `DISCORD_GUILD_ID` | ID do servidor, para registrar `/manifest` |
+| `DISCORD_GUILD_ID` | ID do servidor, para registrar os comandos |
 | `DISCORD_API_KEY` | Chave gerada pelo instalador (formato `mk_` + 32 chars) |
-| `DISCORD_API_URL` | Onde o bot chama a API (padrão `http://localhost:3000`) |
+| `DISCORD_API_URL` | Padrão `http://api:3000` — **nome do serviço no Compose**, não `localhost` |
 | `DISCORD_COOLDOWN_SECONDS` | Cooldown por usuário no Discord (30 s) |
 | `DISCORD_MAX_FILE_MB` | Limite de anexo considerado (8 MB) |
+| `DISCORD_TIMEOUT_MS` | Timeout das chamadas do bot à API (30 s) |
 
-Formato aceito de repositório: `nome-do-repos/nome-do-repo` (sem URL).
+Formato aceito de repositório: `nome-do-repo/nome-do-repo` (sem URL).
 
 ---
 
@@ -129,38 +210,83 @@ Formato aceito de repositório: `nome-do-repos/nome-do-repo` (sem URL).
 
 Comportamento do `/manifest appid:<AppID>`:
 
-- responde imediatamente ("processando") e edita a mensagem com o ZIP pronto;
+- responde **imediatamente** confirmando que está processando (com o AppID e
+  a fonte escolhida), envia uma segunda mensagem antes do download e edita a
+  última com o ZIP pronto;
+- opção `fonte` com as escolhas vindo da API (`GET /sources`), mais fallback
+  automático quando nada é escolhido;
+- o resumo final traz a **proveniência**: fonte, repositório, commit e se o
+  cache era novo ou antigo;
+- se houver `.lua`/`.json`, ele é **descrevido mas não anexado**, com aviso de
+  que contém chaves de depot e o link bruto do repositório público;
 - cooldown por usuário (`DISCORD_COOLDOWN_SECONDS`);
-- se o ZIP exceder o limite de anexo, avisa e indica o endpoint da API;
+- se o ZIP exceder o limite de anexo, emite um **link temporário**
+  (se `PUBLIC_BASE_URL` estiver configurado) com horário de expiração — e só
+  se não houver link, aponta o endpoint da API;
 - se a API estiver fora do ar ou a chave for inválida, responde mensagem
   amigável **sem expor credenciais**;
 - erros da API (`branch_nao_encontrada`, `sem_manifests`,
-  `github_rate_limit`…) viram textos em português.
+  `github_rate_limit`, `fonte_desconhecida`…) viram textos em português.
+
+`/busca nome:<texto>` — pesquisa o nome na loja da Steam e devolve os AppIDs
+encontrados (cooldown próprio).
 
 ---
 
 ## Uso da API
 
 Documentação interativa: `GET /docs`. Health: `GET /health`
-(`?deep=1` também testa o GitHub).
+(`?deep=1` também testa todas as fontes).
+
+### Rotas
+
+| Rota | Auth | O que faz |
+|---|---|---|
+| `GET /health` | — | Liveness (sem rede). Com `?deep=1`, testa cada fonte |
+| `GET /status` | chave | Visão geral: fontes, cache, busca, links e limites |
+| `GET /sources` | chave | Fontes, ordem efetiva, credencial declarada e limites |
+| `GET /search?q=` | chave | Nome → AppID pela loja da Steam |
+| `GET /manifests?id=` | chave | Lista os `.manifest` + proveniência + `configFiles` |
+| `GET /download?id=` | chave | ZIP contendo **só** `.manifest` |
+| `POST /links` | chave | Emite link temporário de download |
+| `GET /links/:token` | — (token HMAC) | Consome o link temporário |
+| `GET /docs` | — | Página de documentação |
+| `/admin/keys` | `X-Admin-Token` | Gerir chaves |
 
 ### Autenticação
 
-- Rotas `/manifests` e `/download`: chave no header `X-API-Key: <chave>` ou
-  query `key=<chave>`.
+- Rotas de dados: chave no header `X-API-Key: <chave>` ou query `key=<chave>`.
 - Rotas `/admin/*`: header `X-Admin-Token: <ADMIN_TOKEN>`.
+- `GET /links/:token` não usa chave (a autorização está no token) e tem rate
+  limit por IP.
 
 ### Exemplos
 
 ```bash
-# Listar manifests de um AppID
-curl -H "X-API-Key: SUA_CHAVE" "http://127.0.0.1:3000/manifests?id=123456"
+K="X-API-Key: SUA_CHAVE"
 
-# Baixar ZIP
-curl -OJ -H "X-API-Key: SUA_CHAVE" "http://127.0.0.1:3000/download?id=123456"
+# O que existe (fontes, prioridade, limites)
+curl -H "$K" "http://127.0.0.1:3000/sources"
 
-# Forçar atualizacao de cache (checa commit no GitHub)
-curl -H "X-API-Key: SUA_CHAVE" "http://127.0.0.1:3000/manifests?id=123456&refresh=1"
+# Buscar um jogo pelo nome (a loja devolve no maximo 10; cortamos aqui)
+curl -H "$K" --get "http://127.0.0.1:3000/search" --data-urlencode "q=Counter-Strike 2"
+
+# Listar manifests de um AppID (com proveniencia e fonte usada)
+curl -H "$K" "http://127.0.0.1:3000/manifests?id=123456"
+
+# Escolher a fonte explicitamente: sem fallback se ela falhar
+curl -H "$K" "http://127.0.0.1:3000/manifests?id=123456&source=manifesthub"
+
+# Forcar atualizacao de cache (checa o commit de novo)
+curl -H "$K" "http://127.0.0.1:3000/manifests?id=123456&refresh=1"
+
+# Baixar ZIP (cabecalhos X-Manifest-Gate-Source/Origin/Version/Fetched-At)
+curl -OJ -H "$K" "http://127.0.0.1:3000/download?id=123456"
+
+# Emitir um link temporario (15 min por padrao)
+curl -X POST http://127.0.0.1:3000/links \
+  -H "Content-Type: application/json" -H "$K" \
+  -d '{"id":"123456","source":"manifesthub","ttl":600}'
 
 # Criar chave para um cliente
 curl -X POST http://127.0.0.1:3000/admin/keys \
@@ -187,32 +313,78 @@ node src/cli.js cache:invalidate <appid>
 ### Fluxo de validação do `/download`
 
 1. `id` numérico (1–12 dígitos) → senão `400 appid_invalido`
-2. formato da chave (`mk_` + 32 alfanuméricos) → senão `400`
-3. chave existente, ativa, não expirada, com usos (`401`/`403`)
-4. rate limit por chave (`429`)
-5. branch do AppID consultada; `.manifest` filtrados com validação de caminho,
-   tamanho e integridade (SHA1 do blob git + SHA-256 do cache)
-6. ZIP servido (`X-Cache: hit|miss|stale`) e 1 uso consumido
+2. `source`, quando vier, precisa existir e estar habilitada → senão `400`
+3. formato da chave (`mk_` + 32 alfanuméricos) → senão `400`
+4. chave existente, ativa, não expirada, com usos (`401`/`403`)
+5. rate limit por chave (`429`)
+6. fonte escolhida por prioridade; se falhar, próxima (fallback). O resultado
+   carrega `source`, `origin`, `version`, `fetchedAt` e `attempts`
+7. branch do AppID consultada; arquivos **classificados**: `manifest`
+   baixado, `config` só listado, `forbidden` nem aparece
+8. caminho, tamanho e integridade validados (SHA1 do blob git + SHA-256 do
+   cache) antes de entrar no ZIP
+9. política do ZIP conferida de novo (`assertZipPolicy`): só `.manifest`
+10. ZIP servido (`X-Cache: hit|miss|stale` + headers de proveniência) e
+    1 uso consumido
+
+### Política de pacote — o que um pacote tem e de onde vem
+
+Cada AppID é um pacote. O que existe e o que sai:
+
+| Arquivo | Classe | Sai no ZIP? | Origem |
+|---|---|---|---|
+| `<appid>.manifest` e `<depot>_<manifest>.manifest` | `manifest` | **sim** | bruto da branch do AppID na fonte escolhida |
+| `<appid>.lua`, `<appid>.json` | `config` | **não** — só nome, tamanho, aviso e `rawUrl` | o bruto já está no repositório público; o serviço só aponta |
+| `key.vdf`, `*.vdf`, `*.key`, `*.acf`, `depotkeys.json` | `forbidden` | **não, e nem na listagem** | — |
+
+O `rawUrl` aponta para `https://raw.githubusercontent.com/<repo>/refs/heads/<appid>/<arquivo>`,
+ou seja, **para o repositório público de origem** — o mesmo que um navegador
+abriria. Nenhum desses arquivos passa pelo servidor: não é baixado, não entra
+no disco do cache e não é incluído em resposta alguma.
+
+Um pacote **não pode conter** o que não existe na origem: o serviço nunca
+inventa manifest nem chave a partir de um AppID. Se a fonte só tem
+`.lua`/`.json`, a resposta diz isso (`count: 0` + `configFiles` com o motivo)
+em vez de prometer entregável.
 
 ### Erros claros
 
 `branch_nao_encontrada`, `sem_manifests`, `github_rate_limit`,
-`github_timeout`, `github_indisponivel`, `zip_grande_demais`,
-`arquivo_grande_demais`, `falha_integridade`, `repositorio_nao_configurado`,
-`repositorio_invalido` — cada um com mensagem em português e status HTTP
-adequado (400/401/403/404/413/429/502/503/504).
+`github_timeout`, `github_indisponivel`, `github_auth`,
+`fonte_desconhecida`, `fonte_desabilitada`, `repositorio_nao_configurado`,
+`nenhuma_fonte`, `busca_invalida`, `busca_indisponivel`, `busca_timeout`,
+`link_desabilitado`, `link_sem_segredo`, `link_ttl_invalido`,
+`link_invalido`, `link_expirado`, `zip_grande_demais`,
+`arquivo_grande_demais`, `falha_integridade`, `repositorio_invalido` —
+cada um com mensagem em português e status HTTP adequado
+(400/401/403/404/410/413/429/502/503/504). Quando há mais de uma tentativa
+de fonte, o erro traz `attempts` com o código de cada uma.
 
 ---
 
 ## Cache
 
-- Local: `./data/cache/<appid>/{meta.json,files/}` (volume `./data` no Docker).
+- Local: `./data/cache/<fonte>/<appid>/{meta.json,files/}` (volume `./data` no
+  Docker). A entrada é **por fonte**: o mesmo AppID cacheado do ManifestHub não
+  é confundido com o do seu repositório. Instalações antigas com o layout
+  plano (`<cache>/<appid>/`) são migradas automaticamente na primeira
+  execução.
 - Consultas novas servem do cache dentro de `CACHE_TTL_SECONDS`.
 - Após o TTL, a API consulta o SHA da branch; se o commit mudou, os arquivos
   são baixados de novo e os removidos são apagados.
 - `refresh=1` força a checagem sob demanda.
-- GitHub fora do ar: serve o cache velho (header `X-Cache: stale`) enquanto
+- Fonte fora do ar: serve o cache velho (header `X-Cache: stale`) enquanto
   estiver dentro de `CACHE_STALE_MAX_SECONDS`; depois disso responde `502/504`.
+- `CACHE_MAX_BYTES` limita o total: ao estourar, as entradas mais antigas são
+  removidas primeiro; a que acabou de ser montada nunca é removida (senão o
+  cache entraria em loop de baixar-e-apagar).
+- **Sem downloads duplicados**: pedidos simultâneos do mesmo AppID compartilham
+  a mesma ida (bloqueio por chave), e o mesmo arquivo não é baixado duas vezes
+  no mesmo trabalho. Arquivo apagado ou corrompido é reparado na consulta
+  seguinte.
+- A proveniência fica na `meta.json`: fonte, repositório, branch, commit,
+  data da consulta (`fetchedAt`/`checkedAt`), idade, bytes e contagem de
+  manifests e de configs.
 - API e bot usam o mesmo diretório (compartilhado).
 
 ---
@@ -279,12 +451,24 @@ Configurações (`./.env`) e cache (`./data`) são mantidos.
 ## Segurança
 
 - Chaves armazenadas apenas como hash SHA-256; o valor só aparece no `POST`.
-- `.env` criado com permissão `600`; nunca faça commit dele.
+- `.env` criado com permissão `600`; nunca faça commit dele. O instalador
+  **preserva** um `.env` já existente e só preenche o que falta.
+- Credenciais digitadas no instalador são pedidas sem eco e nunca impressas.
 - Logs registram apenas o caminho da rota (sem query string, portanto sem
   chaves); respostas e erros do bot não ecoam credenciais.
+- **Nenhum token de terceiro vai embutido no código ou na imagem** — tudo
+  entra pelo `.env` do operador.
 - Caminhos de arquivo validados contra traversal; apenas `.manifest`.
-
----
+- **Chave de depot nunca**: `key.vdf`, `*.vdf`, `*.key`, `*.acf`,
+  `depotkeys.json` e conteúdo do tipo `DecryptionKey` não são baixados,
+  guardados, listados ou servidos. `.lua`/`.json` só são apontados.
+- Arquivos recebidos são tratados como **dado**: validados e servidos como
+  `application/zip`, nunca executados. Nenhum Lua é interpretado.
+- Links temporários: payload assinado HMAC-SHA256 com AppID, fonte e
+  expiração; adulteração → `link_invalido`, data vencida → `link_expirado`
+  (410), TTL fora do intervalo recusado, token limitado a 2 KB.
+- `/status`, `/sources` e `/search` não devolvem segredo algum (verificado
+  por teste).
 
 ## Testes
 
@@ -292,15 +476,55 @@ Configurações (`./.env`) e cache (`./data`) são mantidos.
 npm test
 ```
 
-Cobre: validação (AppID, caminho, branch, chave), cache (TTL, invalidação por
-commit, stale, reparo de integridade, limites), API (autenticação, ZIP, rate
-limit, erros do GitHub, admin), bot (cooldown, fluxo, cliente HTTP, vazamento
-de credencial), instalador/desinstalador e bootstrap `curl | bash` (em pastas
-temporárias com Docker simulado e servidor local), incluindo recusa em pasta
-alheia e `--purge`, e uma consulta real à API do GitHub.
+Cobre (180 testes):
+
+- **validação** — AppID, caminho, branch, chaves, IDs como string;
+- **fontes e fallback** — ordem de prioridade, `source=` explícito sem
+  fallback, código por fonte (`fonte_*`, `nenhuma_fonte`, `repositorio_...`),
+  `attempts`, e a promoção de `github_auth`/`github_rate_limit`;
+- **configuração quebrada** — um `GITHUB_REPOSITORY` no formato errado (ex.:
+  um URL bruto colado no campo) é reportado como `valid: false` em
+  `/health` e `/sources` **sem depender de rede**, e o `deep=1` mostra o
+  código `repositorio_invalido` em vez de "fonte saudável"; o fallback ainda
+  entrega o pacote pela outra fonte;
+- **cache** — TTL, invalidação por commit, stale, reparo de integridade,
+  migração do layout antigo, `CACHE_MAX_BYTES`, e concorrência provando
+  **um** download para seis pedidos simultâneos;
+- **busca** — normalização do termo, AppID como string, limite de
+  resultados, cache em memória (com teto de 500), timeout e respostas
+  malformadas;
+- **links** — emissão, roundtrip, token adulterado, assinatura trocada,
+  payload gigante, TTL fora do intervalo, expirado (410) e rate limit por IP;
+- **ZIP** — só `.manifest`, sem `.lua`, sem chave, proveniência nos headers;
+- **API** — autenticação, rate limit, erros, admin, `/sources`, `/status`,
+  `/search`, headers `X-Manifest-Gate-*`;
+- **bot** — cooldown, fluxo, proveniência, aviso de config, fonte repassada,
+  progresso durante o processamento, ZIP grande → link temporário, vazamento
+  de credencial;
+- **instalador/desinstalador/bootstrap** — pastas temporárias com Docker
+  simulado, `--purge`, recusa em pasta alheia, `restart` re-lendo o `.env` e
+  migração de `DISCORD_API_URL`;
+- **consultas reais** — API do GitHub (repositório neutro) e o **ManifestHub
+  de verdade** pela branch do AppID, incluindo `rawUrl` de config apontando
+  para arquivo existente. Sem rede, esses testes se ignoram (`skip`) em vez
+  de falhar.
+
+Os testes ignoram o `.env` local (`ENV_FILE` apontando para um arquivo
+inexistente), para que segredos da sua máquina não mudem o resultado.
 
 ## Limites conhecidos
 
-- Somente extensão `.manifest` (decisão de design; alterar exige mudar o código).
+- Somente extensão `.manifest` sai em ZIP (decisão de design; alterar exige
+  mudar o código).
+- `.lua`/`.json` são **apontados, não entregues** — é uma escolha explícita
+  de política: o serviço não guarda chave de depot em disco nem a serve.
 - O bot precisa de `DISCORD_API_KEY` no formato `mk_` + 32 caracteres.
 - Rate limit do GitHub sem token é baixo (~60 req/h); use `GITHUB_TOKEN`.
+  Sem token, uma rajada de AppIDs distintos pode esgotar a cota — o erro é
+  reportado como `github_rate_limit`, com o horário de reset.
+- A busca por nome depende da loja da Steam (sem contrato de estabilidade);
+  se a resposta mudar, o erro vira `busca_indisponivel` em vez de devolver
+  dado inventado. O `limit` enviado à loja é **ignorado por ela** — o corte é
+  feito aqui, no `SEARCH_LIMIT`.
+- Links temporários exigem `PUBLIC_BASE_URL`: a API escuta apenas em
+  `127.0.0.1`, então sem URL pública ninguém alcança `/links/<token>`.

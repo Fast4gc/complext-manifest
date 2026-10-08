@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { config } from './config.js';
-import { branchNameFor, isSafeRepoPath, safeBaseName } from './validate.js';
+import { branchNameFor, isSafeRepoPath, safeBaseName, fileKind, CONTAINS_KEYS_WARNING, rawFileUrl } from './validate.js';
 
 /**
  * Transporte HTTP para repositorios GitHub com uma branch por AppID.
@@ -54,6 +54,7 @@ export function resolveSrc(src) {
       branchTemplate: base.branchTemplate,
       token: base.token,
       apiUrl: base.apiUrl,
+      rawUrl: base.rawUrl,
       timeoutMs: base.timeoutMs,
     };
   }
@@ -63,6 +64,7 @@ export function resolveSrc(src) {
     branchTemplate: src.branchTemplate ?? base.branchTemplate,
     token: src.token ?? base.token,
     apiUrl: (src.apiUrl ?? base.apiUrl).replace(/\/+$/, ''),
+    rawUrl: (src.rawUrl ?? base.rawUrl).replace(/\/+$/, ''),
     timeoutMs: src.timeoutMs ?? base.timeoutMs,
   };
 }
@@ -70,10 +72,21 @@ export function resolveSrc(src) {
 function repositoryOf(src) {
   const repo = src.repository;
   if (!repo) throw new SourceError('repositorio_nao_configurado', ERROR_MESSAGES.repositorio_nao_configurado);
-  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) {
+  if (!repositoryFormatOk(repo)) {
     throw new SourceError('repositorio_invalido', ERROR_MESSAGES.repositorio_invalido);
   }
   return repo;
+}
+
+/**
+ * Checagem de formato `owner/repo` SEM lancar erro.
+ *
+ * Existe para `/health` e `/sources` dizerem "a fonte esta configurada, mas
+ * com valor invalido" antes de qualquer ida a rede — senao um URL colado no
+ * lugar errado do `.env` so apareceria depois, como falha de rede.
+ */
+export function repositoryFormatOk(repo) {
+  return typeof repo === 'string' && /^[\w.-]+\/[\w.-]+$/.test(repo);
 }
 
 /** Headers da API do GitHub. O token nunca aparece em logs ou erros. */
@@ -163,7 +176,18 @@ export async function branchHead(appid, { signal, src } = {}) {
   return { branch, sha };
 }
 
-/** Lista os arquivos entregaveis da branch (arvore recursiva no commit). */
+/**
+ * Lista os arquivos da branch (arvore recursiva no commit), SEM baixar
+ * nenhum conteudo — apenas metadados que a propria API do GitHub devolve.
+ *
+ * A listagem ja vem separada por politica de entrega:
+ *   files       .manifest        -> baixados no cache e entregues no ZIP
+ *   configFiles .lua / .json     -> SO listados, com aviso e link direto
+ *
+ * Nada de `*.vdf` (chave) aparece em qualquer um dos dois.
+ *
+ * @returns {{files: Array, configFiles: Array, truncated: boolean}}
+ */
 export async function listManifestsAt(appid, sha, { signal, src } = {}) {
   const s = resolveSrc(src);
   const repo = repositoryOf(s);
@@ -179,20 +203,44 @@ export async function listManifestsAt(appid, sha, { signal, src } = {}) {
   const tree = Array.isArray(body?.tree) ? body.tree : null;
   if (!tree) throw new SourceError('github_erro', ERROR_MESSAGES.github_erro, 'arvore invalida');
 
-  const ext = config.allowedExtension;
   const files = [];
+  const configFiles = [];
   for (const entry of tree) {
     if (entry.type !== 'blob') continue;
     if (typeof entry.path !== 'string') continue;
-    if (!entry.path.toLowerCase().endsWith(ext)) continue;
+    const kind = fileKind(entry.path);
+    if (kind !== 'manifest' && kind !== 'config') continue; // proibido/ignorado
     if (!isSafeRepoPath(entry.path)) continue;
     const size = Number(entry.size);
     if (!Number.isFinite(size) || size < 0) continue;
-    if (size > config.limits.maxFileBytes) continue; // ignorado por exceder limite
-    files.push({ path: entry.path, name: safeBaseName(entry.path), size, gitSha: entry.sha });
+
+    const base = {
+      path: entry.path,
+      name: safeBaseName(entry.path),
+      size,
+      gitSha: entry.sha,
+      kind,
+    };
+
+    if (kind === 'manifest') {
+      // ignorado por exceder limite: fora da listagem tambem, para o
+      // cliente nao pedir um ZIP que nunca caberia.
+      if (size > config.limits.maxFileBytes) continue;
+      files.push(base);
+      continue;
+    }
+
+    // config: informacao e link direto. O conteudo NUNCA e pedido.
+    configFiles.push({
+      ...base,
+      containsKeys: true,
+      warning: CONTAINS_KEYS_WARNING,
+      rawUrl: rawFileUrl(s, entry.path, appid),
+    });
   }
   files.sort((a, b) => a.path.localeCompare(b.path));
-  return { files, truncated: body.truncated === true };
+  configFiles.sort((a, b) => a.path.localeCompare(b.path));
+  return { files, configFiles, truncated: body.truncated === true };
 }
 
 /** Baixa um arquivo do repositorio no commit informado, validando integridade. */
@@ -201,6 +249,12 @@ export async function fetchFile(appid, file, sha, { signal, src } = {}) {
   const repo = repositoryOf(s);
   if (!isSafeRepoPath(file.path)) {
     throw new SourceError('caminho_invalido', ERROR_MESSAGES.caminho_invalido);
+  }
+  // Trava de politica: so `.manifest` pode ser baixado. `.lua`/`.json` contem
+  // chaves de depot e `*.vdf` tambem — nada deles chega ao disco do servico.
+  // Mesmo que um chamador esqueca de filtrar, aqui bloqueia.
+  if (fileKind(file.path) !== 'manifest') {
+    throw new SourceError('arquivo_invalido', ERROR_MESSAGES.arquivo_invalido, file.name);
   }
   if (file.size > config.limits.maxFileBytes) {
     throw new SourceError('arquivo_grande_demais', ERROR_MESSAGES.arquivo_grande_demais, file.name);
@@ -237,6 +291,10 @@ export async function fetchFile(appid, file, sha, { signal, src } = {}) {
 /** Verifica de passagem se o GitHub responde (usado pelo health check profundo). */
 export async function ping({ src } = {}) {
   const started = Date.now();
-  await ghGet(resolveSrc(src), '/rate_limit');
+  const s = resolveSrc(src);
+  // Confirma a configuracao antes de tocar na rede: um `owner/repo` no
+  // formato errado nao pode aparecer como "fonte saudavel" no /health?deep=1.
+  repositoryOf(s);
+  await ghGet(s, '/rate_limit');
   return { ok: true, latencyMs: Date.now() - started };
 }

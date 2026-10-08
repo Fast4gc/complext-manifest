@@ -33,18 +33,33 @@ test('cooldown 0 desabilita limite', () => {
 /* ------------------------------------------------------------------ */
 
 function stubApi(overrides = {}) {
-  const calls = { list: 0, download: 0 };
-  return {
+  const calls = { list: 0, download: 0, link: 0, listOpts: [], downloadOpts: [] };
+  const api = {
     calls,
-    listManifests: async () => {
+    listManifests: async (appid, opts) => {
       calls.list += 1;
+      calls.listOpts.push(opts ?? {});
       return overrides.list ?? { count: 1, commit: 'abcdef123456', totalBytes: 10, stale: false };
     },
-    download: async () => {
+    download: async (appid, opts) => {
       calls.download += 1;
+      calls.downloadOpts.push(opts ?? {});
       return overrides.download ?? { buffer: Buffer.from('zip-bytes'), filename: 'x.zip' };
     },
   };
+  if (overrides.link !== null) {
+    api.createLink = async (appid, opts) => {
+      calls.link += 1;
+      calls.linkOpts = opts ?? {};
+      return (
+        overrides.link ?? {
+          url: 'http://api.test/links/abc.def.ghi',
+          expiresAt: '2030-01-01T00:00:00.000Z',
+        }
+      );
+    };
+  }
+  return api;
 }
 
 test('AppID invalido responde aviso sem chamar a API', async () => {
@@ -101,6 +116,7 @@ test('ZIP acima do limite do Discord: avisa sem anexar', async () => {
   const api = stubApi({
     list: { count: 3, commit: 'abcdef123456', totalBytes: 9 * 1024 * 1024, stale: false },
     download: { buffer: Buffer.alloc(9 * 1024 * 1024), filename: 'big.zip' },
+    link: null, // servidor sem PUBLIC_BASE_URL: sem link disponivel
   });
   const res = await runManifestCommand({
     appid: '730',
@@ -111,6 +127,152 @@ test('ZIP acima do limite do Discord: avisa sem anexar', async () => {
   });
   assert.match(res.content, /limite de anexo do Discord/);
   assert.match(res.content, /GET \/download/);
+  assert.equal(res.files, undefined);
+});
+
+test('ZIP acima do limite: oferece link temporario com expiracao', async () => {
+  const api = stubApi({
+    list: { count: 3, commit: 'abcdef123456', totalBytes: 9 * 1024 * 1024, stale: false },
+    download: { buffer: Buffer.alloc(9 * 1024 * 1024), filename: 'big.zip' },
+  });
+  const res = await runManifestCommand({
+    appid: '730',
+    api,
+    cooldown: createCooldown(30),
+    userId: 'u',
+    maxBytes: 8 * 1024 * 1024,
+  });
+  assert.match(res.content, /limite de anexo do Discord/);
+  assert.match(res.content, /<http:\/\/api\.test\/links\/abc\.def\.ghi>/);
+  assert.match(res.content, /Expira em/);
+  assert.equal(res.files, undefined, 'nao anexa o ZIP');
+  assert.equal(api.calls.link, 1);
+});
+
+test('ZIP grande com link recusado pela API cai no aviso sem vazar erro', async () => {
+  const api = stubApi({
+    list: { count: 3, totalBytes: 9 * 1024 * 1024 },
+    download: { buffer: Buffer.alloc(9 * 1024 * 1024), filename: 'big.zip' },
+    link: null,
+  });
+  // Simula o servidor com PUBLIC_BASE_URL ligado mas LINK_SECRET ausente.
+  api.createLink = async () => {
+    throw new ApiError('link_desabilitado', BOT_MESSAGES.link_desabilitado, 503);
+  };
+  const res = await runManifestCommand({
+    appid: '730',
+    api,
+    cooldown: createCooldown(30),
+    userId: 'u',
+    maxBytes: 8 * 1024 * 1024,
+  });
+  assert.match(res.content, /GET \/download/);
+  assert.doesNotMatch(res.content, /link_desabilitado/, 'codigo interno nao vaza');
+  assert.equal(res.files, undefined);
+});
+
+test('fonte escolhida e repassada para listagem e download', async () => {
+  const api = stubApi();
+  await runManifestCommand({
+    appid: '730',
+    api,
+    cooldown: createCooldown(0),
+    userId: 'u',
+    maxBytes: 1024 * 1024,
+    source: 'manifesthub',
+  });
+  assert.equal(api.calls.listOpts[0].source, 'manifesthub');
+  assert.equal(api.calls.downloadOpts[0].source, 'manifesthub');
+});
+
+test('sem fonte escolhida, nao manda source undefined explicito', async () => {
+  const api = stubApi();
+  await runManifestCommand({
+    appid: '730',
+    api,
+    cooldown: createCooldown(0),
+    userId: 'u',
+    maxBytes: 1024 * 1024,
+  });
+  assert.equal(api.calls.listOpts[0].source, undefined);
+  assert.equal(api.calls.downloadOpts[0].source, undefined);
+});
+
+test('confirma a solicitacao enquanto processa (onProgress)', async () => {
+  const api = stubApi();
+  const progress = [];
+  await runManifestCommand({
+    appid: '730',
+    api,
+    cooldown: createCooldown(0),
+    userId: 'u',
+    maxBytes: 1024 * 1024,
+    source: 'github',
+    onProgress: (text) => progress.push(text),
+  });
+  assert.equal(progress.length, 2, 'uma antes de listar e outra antes de baixar');
+  assert.match(progress[0], /730/);
+  assert.match(progress[0], /`github`/);
+  assert.match(progress[1], /manifest\(s\) localizados/);
+  assert.match(progress[1], /Baixando o ZIP/);
+});
+
+test('resumo traz proveniencia e avisa sobre arquivos de configuracao', async () => {
+  const api = stubApi({
+    list: {
+      count: 1,
+      commit: 'abcdef1234567890',
+      version: 'abcdef1234567890',
+      source: 'manifesthub',
+      origin: 'steamtoolsapp/ManifestHub',
+      totalBytes: 10,
+      stale: true,
+      configCount: 1,
+      configFiles: [
+        {
+          name: '730.lua',
+          containsKeys: true,
+          warning: 'Contem chaves de descriptografia de depot.',
+          rawUrl: 'https://raw.githubusercontent.com/steamtoolsapp/ManifestHub/refs/heads/730/730.lua',
+        },
+      ],
+    },
+  });
+  const res = await runManifestCommand({
+    appid: '730',
+    api,
+    cooldown: createCooldown(0),
+    userId: 'u',
+    maxBytes: 1024 * 1024,
+  });
+  assert.match(res.content, /fonte `manifesthub`/);
+  assert.match(res.content, /repo `steamtoolsapp\/ManifestHub`/);
+  assert.match(res.content, /commit `abcdef1`/);
+  assert.match(res.content, /cache antigo/);
+  assert.match(res.content, /chaves de depot/, 'avisa por que o .lua nao veio');
+  assert.match(res.content, /730\.lua/);
+  assert.match(res.content, /https:\/\/raw\.githubusercontent\.com/);
+  assert.equal(res.files.length, 1, 'so o .manifest vai no anexo');
+});
+
+test('sem manifests mas com config: explica o que existe e por que nao veio', async () => {
+  const api = stubApi({
+    list: {
+      count: 0,
+      configCount: 2,
+      configFiles: [{ name: '730.lua' }, { name: '730.json' }],
+    },
+  });
+  const res = await runManifestCommand({
+    appid: '730',
+    api,
+    cooldown: createCooldown(0),
+    userId: 'u',
+    maxBytes: 1024 * 1024,
+  });
+  assert.match(res.content, /Nenhum \.manifest/);
+  assert.match(res.content, /chaves de depot/);
+  assert.match(res.content, /730\.lua/);
   assert.equal(res.files, undefined);
 });
 

@@ -121,10 +121,20 @@ export function parseManifestName(name) {
 /**
  * Classifica um arquivo encontrado na fonte.
  *
- *  manifest  .manifest                    -> conteudo principal do ZIP
- *  config    .lua / .json                 -> configuracao (DADOS, nao codigo)
- *  forbidden chaves (key.vdf, depotkeys)   -> NUNCA listado nem entregue
- *  ignored   qualquer outro                -> fora do escopo
+ *  manifest  .manifest               -> baixado, em cache, entregue no ZIP
+ *  config    .lua / .json            -> SO listado (nome, tamanho, link)
+ *  forbidden chaves (key.vdf, .vdf)   -> NUNCA listado nem entregue
+ *  ignored   qualquer outro          -> fora do escopo
+ *
+ * POLITICA DE ENTREGA (definida pelo operador): nenhuma chave de depot e
+ * baixada, guardada ou servida por este servico.
+ *
+ * Verificado ao vivo no ManifestHub (branch 730): o `730.lua` traz
+ * `addappid(732,0,"da1f7691...")`, que e exatamente o `"DecryptionKey"
+ * "da1f7691..."` do `key.vdf`, e o `730.json` traz 15 `decryptionkey`.
+ * Por isso `.lua`/`.json` entram como `config` com `containsKeys: true`
+ * e um link direto ao repositorio publico: quem precisar busca por conta
+ * propria. O conteudo deles NUNCA toca o disco do servico nem o ZIP.
  *
  * Trata todo arquivo como DADO: nada aqui executa, interpreta ou avalia
  * scripts Lua (ou qualquer outro conteudo recebido).
@@ -138,18 +148,54 @@ const FORBIDDEN_PATTERNS = [
   /\.acf$/i,
 ];
 
+/** Arquivos de configuracao: aparecem na listagem, mas nunca sao baixados. */
+const CONFIG_PATTERNS = [/\.lua$/i, /\.json$/i];
+
 export function fileKind(p) {
   if (typeof p !== 'string' || p === '') return 'ignored';
   if (FORBIDDEN_PATTERNS.some((re) => re.test(p))) return 'forbidden';
   if (p.toLowerCase().endsWith('.manifest')) return 'manifest';
-  if (p.toLowerCase().endsWith('.lua') || p.toLowerCase().endsWith('.json')) return 'config';
+  if (CONFIG_PATTERNS.some((re) => re.test(p))) return 'config';
   return 'ignored';
 }
 
-/** true se o arquivo pode entrar num ZIP (manifest sempre; config so se pedido). */
-export function isDeliverable(p, { includeConfig = false } = {}) {
-  const kind = fileKind(p);
-  if (kind === 'manifest') return true;
-  if (kind === 'config') return includeConfig;
-  return false;
+/**
+ * true se o arquivo deve ser baixado e guardado em cache.
+ * Apenas `.manifest`: chave/config NUNCA toca o disco do servico.
+ */
+export function isDownloadable(p) {
+  return fileKind(p) === 'manifest';
+}
+
+/** true se o arquivo pode aparecer numa resposta de listagem. */
+export function isListable(p) {
+  const k = fileKind(p);
+  return k === 'manifest' || k === 'config';
+}
+
+/**
+ * Aviso curto em pt-BR para anexar a arquivos `config` da listagem.
+ * Motivo: esses arquivos carregam chaves de descriptografia de depot.
+ */
+export const CONTAINS_KEYS_WARNING =
+  'Contem chaves de descriptografia de depot. Nao e baixado nem servido por este servico.';
+
+/**
+ * URL bruta (raw) para o cliente buscar um arquivo de configuracao direto
+ * no repositorio da fonte, sem passar pelo servico. O servico so aponta.
+ *
+ * @param {object} src      {repository, branchTemplate, rawUrl}
+ * @param {string} filePath caminho do arquivo dentro do repositorio
+ * @param {string} appid
+ * @returns {string|null}
+ */
+export function rawFileUrl(src, filePath, appid) {
+  if (!src || !src.repository || !isSafeRepoPath(filePath)) return null;
+  const branch = branchNameFor(appid, src.branchTemplate || '{appid}');
+  if (!branch) return null;
+  const owner = String(src.repository).split('/')[0];
+  if (!owner) return null;
+  const base = (src.rawUrl || 'https://raw.githubusercontent.com').replace(/\/+$/, '');
+  const encoded = filePath.split('/').map(encodeURIComponent).join('/');
+  return `${base}/${src.repository}/refs/heads/${branch}/${encoded}`;
 }

@@ -8,7 +8,8 @@ import crypto from 'node:crypto';
  * Recursos de teste:
  *   - setBranch(name, sha)      troca o commit (simula push/change)
  *   - setFiles(files)           troca os arquivos da branch
- *   - setMode('ok'|'down'|'rate_limit'|'slow')
+ *   - setMode('ok'|'down'|'rate_limit'|'auth'|'slow')
+ *   - setRepo404('owner/repo')  aquele repositorio responde 404 em tudo
  *   - calls                     contagem de chamadas (para provar cache)
  */
 export async function startMockGitHub({ branch = '123456', commit = 'a'.repeat(40) } = {}) {
@@ -17,6 +18,7 @@ export async function startMockGitHub({ branch = '123456', commit = 'a'.repeat(4
     commit,
     files: new Map(), // path -> Buffer
     mode: 'ok',
+    repo404: new Set(), // repositorios que respondem 404 em tudo
     calls: { branches: 0, trees: 0, contents: 0 },
   };
 
@@ -44,6 +46,17 @@ export async function startMockGitHub({ branch = '123456', commit = 'a'.repeat(4
           'x-ratelimit-reset': String(Math.floor(Date.now() / 1000) + 60),
         },
       );
+      return;
+    }
+    if (state.mode === 'auth') {
+      // GitHub real: 401 para token invalido (mesmo em endpoint publico).
+      send(401, { message: 'Bad credentials' });
+      return;
+    }
+    // Repositorio "apagado": toda chamada nele responde 404, como no GitHub.
+    const repoRequested = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)/);
+    if (repoRequested && state.repo404.has(repoRequested[1])) {
+      send(404, { message: 'Not Found' });
       return;
     }
 
@@ -113,6 +126,9 @@ export async function startMockGitHub({ branch = '123456', commit = 'a'.repeat(4
     setMode: (mode) => {
       state.mode = mode;
     },
+    /** Faz `owner/repo` responder 404 em toda chamada (fonte ausente). */
+    setRepo404: (repo) => state.repo404.add(repo),
+    clearRepo404: () => state.repo404.clear(),
     resetCalls: () => {
       state.calls.branches = 0;
       state.calls.trees = 0;

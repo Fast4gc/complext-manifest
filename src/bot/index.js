@@ -1,8 +1,14 @@
 /**
- * Bot do Discord: comando /manifest appid:<AppID>.
- * Consome a mesma API do backend (DISCORD_API_URL + DISCORD_API_KEY).
+ * Bot do Discord.
  *
- * Credenciais (DISCORD_TOKEN, DISCORD_API_KEY) nunca aparecem em logs ou respostas.
+ *   /manifest appid:<AppID> [fonte:<id>]   lista e baixa o ZIP de manifests
+ *   /busca   nome:<texto>                  pesquisa nome -> AppID
+ *
+ * Consome a mesma API do backend (DISCORD_API_URL + DISCORD_API_KEY): o bot
+ * nao fala com nenhuma fonte diretamente.
+ *
+ * Credenciais (DISCORD_TOKEN, DISCORD_API_KEY) nunca aparecem em logs ou
+ * respostas. O token vem do .env, assim como o ID da guild.
  */
 import { Client, GatewayIntentBits, REST, Routes } from 'discord.js';
 import { config } from '../config.js';
@@ -31,59 +37,175 @@ if (!requireEnv('DISCORD_API_KEY', apiKey)) {
 
 const api = createApiClient({ baseUrl: apiUrl, key: apiKey, timeoutMs });
 const cooldown = createCooldown(cooldownSeconds);
+const searchCooldown = createCooldown(Math.max(5, Math.floor(cooldownSeconds / 2)));
 const maxBytes = Math.floor(maxFileMb * 1024 * 1024);
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
-const COMMAND = {
-  name: 'manifest',
-  description: 'Lista e baixa os manifests disponiveis para um AppID',
-  options: [
-    {
-      type: 4, // INTEGER
-      name: 'appid',
-      description: 'AppID da Steam (ex.: 123456)',
-      required: true,
-      min_value: 1,
-      max_value: 999999999999,
-    },
-  ],
+/**
+ * Opcao `fonte`. As escolhas vem da propria API (`/sources`) no boot: o
+ * bot nunca inventa uma fonte que o servidor nao tem. Se a API estiver fora
+ * no boot, o campo fica como texto livre e a API responde erro claro.
+ */
+const SOURCE_OPTION = {
+  type: 3, // STRING
+  name: 'fonte',
+  description: 'Fonte dos manifests (deixe vazio para usar a prioridade do servidor)',
+  required: false,
+  choices: [],
 };
+
+const COMMANDS = [
+  {
+    name: 'manifest',
+    description: 'Baixa o ZIP com os manifests disponiveis para um AppID',
+    options: [
+      {
+        type: 4, // INTEGER
+        name: 'appid',
+        description: 'AppID da Steam (ex.: 123456)',
+        required: true,
+        min_value: 1,
+        max_value: 999999999999,
+      },
+      SOURCE_OPTION,
+    ],
+  },
+  {
+    name: 'busca',
+    description: 'Pesquisa o AppID de um jogo pelo nome',
+    options: [
+      {
+        type: 3, // STRING
+        name: 'nome',
+        description: 'Nome do jogo (ex.: counter-strike 2)',
+        required: true,
+        min_length: 2,
+        max_length: 64,
+      },
+    ],
+  },
+];
+
+async function registerCommands() {
+  const rest = new REST({ version: '10' }).setToken(token);
+
+  // Monta as escolhas de fonte a partir do que o servidor realmente tem.
+  try {
+    const sources = await api.listSources();
+    const choices = (sources?.sources || [])
+      .filter((s) => s.enabled && s.configured)
+      .slice(0, 25)
+      .map((s) => ({ name: `${s.id} — ${s.name}`.slice(0, 100), value: s.id }));
+    if (choices.length > 0) {
+      SOURCE_OPTION.choices = choices;
+      console.log(`fontes no comando: ${choices.map((c) => c.value).join(', ')}`);
+    } else {
+      console.log('AVISO: nenhuma fonte configurada; campo fonte ficara livre.');
+    }
+  } catch (err) {
+    console.log(
+      'AVISO: nao consegui listar /sources agora (' +
+        (err?.code || 'erro') +
+        '); campo fonte aceitara texto livre.',
+    );
+  }
+
+  await rest.put(Routes.applicationGuildCommands(client.application.id, guildId), {
+    body: COMMANDS,
+  });
+  console.log('comandos /manifest e /busca registrados na guild');
+}
 
 client.once('clientReady', async () => {
   console.log(`bot online como ${client.user?.tag || '(sem tag)'}; guild=${guildId}`);
   try {
-    const rest = new REST({ version: '10' }).setToken(token);
-    await rest.put(Routes.applicationGuildCommands(client.application.id, guildId), {
-      body: [COMMAND],
-    });
-    console.log('comando /manifest registrado na guild');
+    await registerCommands();
   } catch (err) {
     console.error('falha ao registrar comandos:', err?.message || err);
   }
 });
 
+/** Resposta visivel enquanto a API trabalha (antes de terminar). */
+async function progress(interaction, text) {
+  try {
+    if (interaction.deferred) await interaction.editReply({ content: `⏳ ${text}` });
+  } catch (err) {
+    console.warn('nao consegui atualizar o status:', err?.message || err);
+  }
+}
+
+async function finish(interaction, result) {
+  const payload = { content: result.content };
+  if (result.files && result.files.length > 0) payload.files = result.files;
+  await interaction.editReply(payload);
+}
+
 client.on('interactionCreate', async (interaction) => {
-  if (!interaction.isChatInputCommand() || interaction.commandName !== 'manifest') return;
+  if (!interaction.isChatInputCommand()) return;
 
   const userId = interaction.user.id;
   try {
-    // Resposta imediata enquanto processa (defer).
-    await interaction.deferReply();
+    if (interaction.commandName === 'manifest') {
+      const appid = String(interaction.options.getInteger('appid'));
+      const source = interaction.options.getString('fonte') || undefined;
 
-    const result = await runManifestCommand({
-      appid: String(interaction.options.getInteger('appid')),
-      api,
-      cooldown,
-      userId,
-      maxBytes,
-    });
+      // Confirma imediatamente (defer) e diz o que vai fazer.
+      await interaction.deferReply();
+      await progress(
+        interaction,
+        `Buscando manifests do AppID **${appid}**` +
+          (source ? ` na fonte \`${source}\`` : '') +
+          '…',
+      );
 
-    if (result.files && result.files.length > 0) {
-      await interaction.editReply({ content: result.content, files: result.files });
-    } else {
-      await interaction.editReply({ content: result.content });
+      const result = await runManifestCommand({
+        appid,
+        api,
+        cooldown,
+        userId,
+        maxBytes,
+        source,
+        onProgress: (text) => progress(interaction, text),
+      });
+      await finish(interaction, result);
+      return;
     }
+
+    if (interaction.commandName === 'busca') {
+      const query = String(interaction.options.getString('nome') || '');
+      const cd = searchCooldown.check(userId);
+      if (!cd.ok) {
+        await interaction.reply({
+          content: `Aguarde **${cd.retryInSec}s** antes de pesquisar de novo.`,
+          ephemeral: true,
+        });
+        return;
+      }
+      searchCooldown.hit(userId);
+
+      await interaction.deferReply();
+      const found = await api.search(query);
+
+      if (!found?.results?.length) {
+        await interaction.editReply({
+          content: `Nenhum jogo encontrado para **${query}**.`,
+        });
+        return;
+      }
+
+      const lines = found.results.map(
+        (r) => `• **${r.name || '(sem nome)'}** — AppID \`${r.appid}\` (${r.type})`,
+      );
+      await interaction.editReply({
+        content:
+          `Resultados para **${found.query}**:\n${lines.join('\n')}\n` +
+          `\nUse \`/manifest appid:<AppID>\` para baixar os manifests.`,
+      });
+      return;
+    }
+
+    await interaction.reply({ content: 'Comando desconhecido.', ephemeral: true });
   } catch (err) {
     const text =
       err instanceof ApiError && err.code === 'limite_de_requisicoes'

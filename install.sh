@@ -271,7 +271,18 @@ setup_env() {
 
   env_ensure PORT 3000
   env_ensure HOST 127.0.0.1
-  env_ensure DISCORD_API_URL "http://localhost:3000"
+  # O bot roda DENTRO da rede do Compose: "localhost" dentro do container
+  # seria ele proprio e a API nunca responderia. O nome de servico e "api".
+  env_ensure DISCORD_API_URL "http://api:3000"
+  local api_url
+  api_url="$(env_get DISCORD_API_URL || true)"
+  case "$api_url" in
+    http://localhost:*|http://127.0.0.1:*|https://localhost:*|https://127.0.0.1:*)
+      warn "DISCORD_API_URL aponta para localhost (inacessivel de dentro do container)."
+      warn "ajustando para http://api:3000 (nome do servico no Compose)."
+      env_set DISCORD_API_URL "http://api:3000"
+      ;;
+  esac
   env_set INSTALL_MODE "$INSTALL_MODE"
   chmod 600 "$ENV_FILE" 2>/dev/null || true
 }
@@ -369,9 +380,12 @@ cmd_stop() {
 
 cmd_restart() {
   have_docker || die "Docker indisponivel"
+  # `restart` mantem os containers antigos com o ambiente VELHO do .env.
+  # `up -d` recria so o que mudou e le o .env de novo — e quando nada mudou,
+  # sai rapido igual.
   # shellcheck disable=SC2046
-  compose $(current_profile_args) restart
-  log "servicos reiniciados."
+  compose $(current_profile_args) up -d
+  log "servicos reiniciados (com o .env atual)."
 }
 
 cmd_status() {

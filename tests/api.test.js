@@ -7,6 +7,7 @@ import AdmZip from 'adm-zip';
 import { startMockGitHub } from './mockGitHub.js';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mg-api-test-'));
+process.env.ENV_FILE = '/nonexistent/mg-tests.env'; // ignora o .env local: testes isolados
 process.env.DATA_DIR = tmp;
 process.env.CACHE_DIR = path.join(tmp, 'cache');
 process.env.GITHUB_REPOSITORY = 'teste/manifests';
@@ -15,11 +16,17 @@ process.env.REQUEST_TIMEOUT_MS = '400';
 process.env.CACHE_TTL_SECONDS = '60';
 
 const APPID = '123456';
+/** Fonte que estes testes usam: GITHUB_REPOSITORY vem primeiro na prioridade. */
+const SOURCE = 'github';
 const gh = await startMockGitHub({ branch: APPID, commit: 'a'.repeat(40) });
 process.env.GITHUB_API_URL = gh.url;
 
 const { start } = await import('../src/server.js');
 const { createKey, KEY_FORMAT } = await import('../src/store.js');
+const { invalidate } = await import('../src/cache.js');
+
+/** Cache agora e <cacheDir>/<source>/<appid>/meta.json. */
+const metaFile = path.join(tmp, 'cache', SOURCE, APPID, 'meta.json');
 
 const server = await start(0, '127.0.0.1');
 const BASE = `http://127.0.0.1:${server.address().port}`;
@@ -44,6 +51,8 @@ test.beforeEach(() => {
     '123456.manifest': 'manifest-conteudo-b',
     'chave.lua': 'nao deve aparecer',
   });
+  // Cada teste comeca sem cache: nao depende da ordem dos testes.
+  invalidate(APPID);
 });
 
 test.after(async () => {
@@ -61,11 +70,15 @@ test('GET /health responde e informa a origem', async () => {
   assert.equal(res.body.github.token, undefined, 'nunca expoe token');
 });
 
-test('GET /health?deep=1 alcanca o GitHub', async () => {
+test('GET /health?deep=1 alcanca as fontes', async () => {
   const res = await get('/health?deep=1');
   assert.equal(res.status, 200);
-  assert.equal(res.body.github.reachable.ok, true);
-  assert.ok(typeof res.body.github.reachable.latencyMs === 'number');
+  assert.ok(Array.isArray(res.body.deep), 'deep devolve uma entrada por fonte');
+  assert.ok(res.body.deep.length >= 1, 'ao menos a fonte do operador e consultada');
+  const github = res.body.deep.find((d) => d.source === 'github');
+  assert.equal(github.ok, true);
+  assert.ok(typeof github.latencyMs === 'number');
+  assert.equal(res.body.github.reachable, undefined, 'antiga forma aposentada');
 });
 
 test('GET /docs documenta as rotas', async () => {
@@ -112,15 +125,53 @@ test('lista os manifests da branch do AppID', async () => {
   assert.equal(res.body.appid, APPID);
   assert.equal(res.body.branch, APPID);
   assert.equal(res.body.commit, 'a'.repeat(40));
-  assert.equal(res.body.count, 2, 'apenas .manifest; .lua ignorado');
+
+  // Proveniencia do pacote: fonte, repositorio, commit e data da consulta.
+  assert.equal(res.body.source, SOURCE);
+  assert.equal(res.body.origin, 'teste/manifests');
+  assert.equal(res.body.version, 'a'.repeat(40));
+  assert.ok(!Number.isNaN(Date.parse(res.body.fetchedAt)), 'data da consulta');
+  assert.ok(Array.isArray(res.body.attempts), 'regista quem foi consultado');
+
+  assert.equal(res.body.count, 2, 'apenas .manifest');
+  assert.equal(res.body.manifestCount, 2);
   assert.equal(res.body.cached, false);
   const names = res.body.files.map((f) => f.name).sort();
   assert.deepEqual(names, ['123456.manifest', '730.manifest']);
   for (const f of res.body.files) {
     assert.equal(f.sha256.length, 64);
     assert.ok(f.size > 0);
+    assert.equal(f.kind, 'manifest');
+    assert.equal(typeof f.manifestId, 'string', 'ManifestID e sempre string');
   }
   assert.equal(JSON.stringify(res.body).includes('mk_'), false, 'resposta sem chaves');
+});
+
+test('/manifests descreve o .lua sem entregar', async () => {
+  const res = await get(`/manifests?id=${APPID}&key=${KEY}`);
+  assert.equal(res.status, 200);
+
+  // O .lua e listado, identificado e apontado — nunca baixado.
+  assert.equal(res.body.configCount, 1);
+  const cfg = res.body.configFiles.find((f) => f.name === 'chave.lua');
+  assert.ok(cfg, 'config aparece na listagem');
+  assert.equal(cfg.kind, 'config');
+  assert.equal(cfg.containsKeys, true, 'avisa que tem chaves');
+  assert.match(cfg.warning, /chaves/i);
+  assert.match(cfg.rawUrl, /chave\.lua$/, 'link direto para o repositorio');
+  assert.match(cfg.rawUrl, /^https:\/\//);
+
+  // Ele NUNCA entra na lista de baixaveis nem no ZIP.
+  assert.equal(
+    res.body.files.some((f) => f.name.endsWith('.lua')),
+    false,
+    '.lua fora dos baixaveis',
+  );
+  assert.equal(
+    fs.existsSync(path.join(tmp, 'cache', SOURCE, APPID, 'files', 'chave.lua')),
+    false,
+    'chave nunca toca o disco',
+  );
 });
 
 test('segunda listagem usa cache (sem chamadas ao GitHub)', async () => {
@@ -144,6 +195,103 @@ test('/download entrega ZIP com os manifests e nada mais', async () => {
   assert.equal(zip.readAsText('730.manifest'), 'manifest-conteudo-a');
   assert.equal(zip.readAsText('123456.manifest'), 'manifest-conteudo-b');
   assert.ok(!entries.some((n) => n.endsWith('.lua')), '.lua nunca sai');
+});
+
+test('/download traz proveniencia nos cabecalhos', async () => {
+  const res = await get(`/download?id=${APPID}&key=${KEY}`);
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('x-manifest-gate-source'), SOURCE);
+  assert.equal(res.headers.get('x-manifest-gate-origin'), 'teste/manifests');
+  assert.equal(res.headers.get('x-manifest-gate-version'), 'a'.repeat(40));
+  assert.ok(res.headers.get('x-manifest-gate-fetched-at'));
+  assert.equal(res.headers.get('x-cache'), 'miss');
+});
+
+test('key.vdf e depotkeys.json nao aparecem nem na listagem nem no ZIP', async () => {
+  // Arquivo de chave real, do jeito que aparece num repositorio de manifests.
+  gh.setFiles({
+    '730.manifest': 'manifest-a',
+    'key.vdf': '"DepotKeys"\n{\n"Depot732" { "DecryptionKey" "da1f7691" }\n}',
+    'depotkeys.json': '{"depot732":"da1f7691"}',
+    'Depot_732.key': 'da1f7691',
+    '730.acf': 'AppState\n{\n}',
+  });
+
+  const list = await get(`/manifests?id=${APPID}&key=${KEY}`);
+  assert.equal(list.status, 200);
+  assert.equal(list.body.count, 1, 'so o .manifest');
+  assert.equal(list.body.configCount, 0, 'nem config: so existe a de chave');
+  const everything = JSON.stringify(list.body).toLowerCase();
+  assert.ok(!everything.includes('key.vdf'));
+  assert.ok(!everything.includes('depotkeys'));
+  assert.ok(!everything.includes('decryptionkey'), 'conteudo de chave nunca aparece');
+
+  const dl = await get(`/download?id=${APPID}&key=${KEY}`);
+  assert.equal(dl.status, 200);
+  const entries = new AdmZip(Buffer.from(dl.body)).getEntries().map((e) => e.entryName);
+  assert.deepEqual(entries, ['730.manifest']);
+});
+
+test('/sources lista fontes, prioridade e limites declarados', async () => {
+  const res = await get(`/sources?key=${KEY}`);
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.order, ['github', 'manifesthub']);
+  const ids = res.body.sources.map((s) => s.id);
+  assert.ok(ids.includes('github') && ids.includes('manifesthub'));
+
+  const ghSrc = res.body.sources.find((s) => s.id === 'github');
+  assert.equal(ghSrc.repository, 'teste/manifests');
+  assert.equal(ghSrc.enabled, true);
+  assert.equal(ghSrc.configured, true);
+  assert.equal(typeof ghSrc.auth, 'boolean', 'diz se exige credencial, sem dizer qual');
+  assert.deepEqual(ghSrc.cannot, [
+    'gerar manifests',
+    'gerar chaves',
+    'listar todas as branches',
+  ]);
+  assert.equal(ghSrc.listsAllBranches, false);
+
+  // Nenhum segredo na resposta.
+  assert.ok(!JSON.stringify(res.body).includes('mk_'));
+  assert.ok(!JSON.stringify(res.body).includes('ghp_'));
+});
+
+test('/status religa tudo: fontes, cache, busca, links e limites', async () => {
+  const res = await get(`/status?key=${KEY}`);
+  assert.equal(res.status, 200);
+  assert.equal(res.body.ok, true);
+  assert.equal(res.body.search.enabled, true);
+  assert.equal(res.body.search.source, 'steam-store');
+  assert.equal(typeof res.body.cache.entries, 'number');
+  assert.equal(res.body.links.enabled, false, 'sem PUBLIC_BASE_URL nao ha link');
+  assert.ok(res.body.limits.maxZipBytes > 0);
+  // Declaracao do que o servico nao faz (nao prometer de graça).
+  const doesNot = res.body.doesNot.join(' | ');
+  assert.match(doesNot, /gerar manifests/);
+  assert.match(doesNot, /chaves de depot/);
+  assert.match(doesNot, /executar arquivos/);
+  assert.ok(!JSON.stringify(res.body).includes('mk_'));
+});
+
+test('/status sem chave responde 400 de formato', async () => {
+  assert.equal((await get('/status')).status, 400);
+  assert.equal((await get('/sources')).status, 400);
+});
+
+test('POST /links sem PUBLIC_BASE_URL responde 503 link_desabilitado', async () => {
+  const res = await fetch(`${BASE}/links`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-API-Key': KEY },
+    body: JSON.stringify({ id: APPID }),
+  });
+  assert.equal(res.status, 503);
+  const body = await res.json();
+  assert.equal(body.error, 'link_desabilitado');
+  assert.match(body.message, /PUBLIC_BASE_URL/);
+
+  // A rota existe e esta documentada; so falta o operador configurar.
+  const docs = await get('/docs');
+  assert.match(String(docs.body), /POST \/links/);
 });
 
 test('download consome 1 uso da chave e respeita maxUses', async () => {
@@ -211,7 +359,6 @@ test('GitHub no limite: 503 github_rate_limit', async () => {
 test('cache stale e servido quando o GitHub cai (X-Cache: stale)', async () => {
   await get(`/download?id=${APPID}&key=${KEY}`); // popula cache
   // Expira o TTL e joga o GitHub para baixo.
-  const metaFile = path.join(tmp, 'cache', APPID, 'meta.json');
   const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
   meta.checkedAt = '2000-01-01T00:00:00.000Z';
   fs.writeFileSync(metaFile, JSON.stringify(meta));

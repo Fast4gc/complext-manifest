@@ -188,6 +188,67 @@ test('comandos start, logs e update funcionam via compose', () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('restart usa up -d, para reler o .env', () => {
+  const dir = makeProject();
+  const bin = makeStubBin(dir);
+  runScript(dir, bin, 'install.sh', ['install', '--api-only']);
+
+  const res = runScript(dir, bin, 'install.sh', ['restart']);
+  assert.equal(res.status, 0, res.stderr);
+  // `docker compose restart` mantem o container com o ambiente ANTIGO do
+  // .env; `up -d` recria o que mudou e le o arquivo de novo.
+  assert.match(res.log, /up -d/);
+  assert.doesNotMatch(res.log, /restart/, 'nao usa mais compose restart');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('DISCORD_API_URL padrao aponta para o servico do Compose', () => {
+  const dir = makeProject();
+  const bin = makeStubBin(dir);
+  runScript(dir, bin, 'install.sh', ['install', '--api-only']);
+  // localhost dentro do container do bot seria o proprio container: quebrado.
+  assert.equal(envValue(dir, 'DISCORD_API_URL'), 'http://api:3000');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('DISCORD_API_URL antigo (localhost) e migrado com aviso', () => {
+  const dir = makeProject();
+  const bin = makeStubBin(dir);
+  const envFile = path.join(dir, '.env');
+  fs.writeFileSync(
+    envFile,
+    fs.readFileSync(path.join(dir, '.env.example'), 'utf8').replace(
+      /^DISCORD_API_URL=.*$/m,
+      'DISCORD_API_URL=http://localhost:3000',
+    ),
+  );
+
+  const res = runScript(dir, bin, 'install.sh', ['install', '--api-only']);
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stderr, /localhost/, 'avisa o que mudou e por que');
+  assert.match(res.stderr, /api:3000/);
+  assert.equal(envValue(dir, 'DISCORD_API_URL'), 'http://api:3000');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('DISCORD_API_URL customizado nao e sobrescrito', () => {
+  const dir = makeProject();
+  const bin = makeStubBin(dir);
+  const envFile = path.join(dir, '.env');
+  fs.writeFileSync(
+    envFile,
+    fs.readFileSync(path.join(dir, '.env.example'), 'utf8').replace(
+      /^DISCORD_API_URL=.*$/m,
+      'DISCORD_API_URL=http://api-externo.internal:4000',
+    ),
+  );
+
+  const res = runScript(dir, bin, 'install.sh', ['install', '--api-only']);
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(envValue(dir, 'DISCORD_API_URL'), 'http://api-externo.internal:4000');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('comando desconhecido retorna erro com uso', () => {
   const dir = makeProject();
   const bin = makeStubBin(dir);

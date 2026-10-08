@@ -79,6 +79,12 @@ export const config = {
     repository: (process.env.GITHUB_REPOSITORY || '').trim(),
     token: (process.env.GITHUB_TOKEN || '').trim(),
     apiUrl: (process.env.GITHUB_API_URL || 'https://api.github.com').replace(/\/+$/, ''),
+    /**
+     * Base para links brutos (raw) de arquivos de configuracao que o
+     * servico NAO baixa: apontamos, o cliente busca. So muda em GitHub
+     * Enterprise (substitua pelo host do raw da sua instancia).
+     */
+    rawUrl: (process.env.GITHUB_RAW_URL || 'https://raw.githubusercontent.com').replace(/\/+$/, ''),
     /** Nome da branch para um AppID. {appid} é substituído. */
     branchTemplate: process.env.BRANCH_TEMPLATE || '{appid}',
     timeoutMs: num(process.env.REQUEST_TIMEOUT_MS, 15_000),
@@ -101,15 +107,21 @@ export const config = {
 
   /**
    * Fontes de manifests, em ordem de prioridade (a primeira que responder
-   * com sucesso vence). `source=<id>` na consulta escolhe uma explicitamente.
+   * com sucesso vence). `source=<id>` na consulta escolhe uma fonte
+   * explicitamente — nesse caso NAO ha fallback para outra fonte.
    *
    * IDs conhecidos:
    *   manifesthub  steamtoolsapp/ManifestHub (publico, uma branch por AppID)
    *   github       GITHUB_REPOSITORY configurado pelo operador
-   *   steamtools   steamtoolsapp.com (API publica documentada, opt-in)
+   *
+   * Fonte desabilitada ou sem configuracao e pulada (ou, se pedida por
+   * `source=`, responde erro claro: fonte_desabilitada /
+   * repositorio_nao_configurado). Nenhuma outra fonte esta integrada:
+   * ver README > "Fontes suportadas" para o motivo de LuaTools e
+   * Steam-Depot-Tools nao estarem.
    */
   sources: {
-    priority: list(process.env.SOURCE_PRIORITY, ['manifesthub', 'github']),
+    priority: list(process.env.SOURCE_PRIORITY, ['github', 'manifesthub']),
     /** Projeto do ManifestHub; sobrescrevel para um fork proprio. */
     manifesthub: {
       repository: (process.env.MANIFESTHUB_REPOSITORY || 'steamtoolsapp/ManifestHub').trim(),
@@ -119,15 +131,6 @@ export const config = {
     /** github ja vem de config.github (GITHUB_REPOSITORY). */
     github: {
       enabled: bool(process.env.GITHUB_SOURCE_ENABLED, true),
-    },
-    /**
-     * API publica de terceiros (opt-in): nenhum token proprio e necessario,
-     * mas ela tem rate limit proprio (1 req/1.5s por IP em /generate).
-     */
-    steamtools: {
-      enabled: bool(process.env.STEAMTOOLS_ENABLED, false),
-      baseUrl: (process.env.STEAMTOOLS_API_URL || 'https://steamtoolsapp.com').replace(/\/+$/, ''),
-      timeoutMs: num(process.env.STEAMTOOLS_TIMEOUT_MS, 20_000),
     },
   },
 
@@ -142,8 +145,33 @@ export const config = {
     timeoutMs: num(process.env.SEARCH_TIMEOUT_MS, 10_000),
     /** Resultados por resposta (a loja devolve no maximo ~10). */
     limit: Math.max(1, num(process.env.SEARCH_LIMIT, 10)),
+    /**
+     * Busca tem bucket proprio de rate limit, separado do da chave, para
+     * uma rajada de buscas nao estourar a cota da loja. Tope por chave.
+     */
+    ratePerMinute: Math.max(1, num(process.env.SEARCH_RATE_PER_MINUTE, 20)),
     /** Cache em memoria de resultados por termo (evita martelar a loja). */
     ttlSeconds: num(process.env.SEARCH_TTL_SECONDS, 600),
+  },
+
+  /**
+   * Links temporarios de download (?id= virando /d/<token>).
+   *
+   * Um link e um token assinado (HMAC) que embute appid, fonte e expiracao:
+   * vencido ou adulterado, nao abre nada. So funciona se PUBLIC_BASE_URL
+   * estiver definido (a API fica em 127.0.0.1; sem URL publica nao ha
+   * como outro host alcancar /d/).
+   */
+  links: {
+    publicBaseUrl: (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, ''),
+    /** Validade padrao de um link, em segundos. */
+    ttlSeconds: num(process.env.LINK_TTL_SECONDS, 900),
+    ttlMaxSeconds: num(process.env.LINK_TTL_MAX_SECONDS, 86_400),
+    /**
+     * Segredo do HMAC. Se vazio, deriva de ADMIN_TOKEN (que o instalador
+     * gera) — trocar ADMIN_TOKEN invalida todos os links emitidos.
+     */
+    secret: process.env.LINK_SECRET || process.env.ADMIN_TOKEN || '',
   },
 
   limits: {
@@ -155,7 +183,11 @@ export const config = {
     defaultRatePerMinute: num(process.env.DEFAULT_RATE_PER_MINUTE, 60),
   },
 
-  /** Somente esta extensão é listada/entregue. Fixo no código de propósito. */
+  /**
+   * Unica extensao que e baixada, guardada em cache e entregue num ZIP.
+   * Fixo no codigo de propósito: `.lua`/`.json` contem chaves de depot e
+   * sao apenas LISTADOS; `*.vdf` nem isso (ver src/validate.js).
+   */
   allowedExtension: '.manifest',
 
   discord: {

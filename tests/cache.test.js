@@ -6,6 +6,7 @@ import path from 'node:path';
 import { startMockGitHub } from './mockGitHub.js';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mg-cache-test-'));
+process.env.ENV_FILE = '/nonexistent/mg-tests.env'; // ignora o .env local: testes isolados
 process.env.DATA_DIR = tmp;
 process.env.CACHE_DIR = path.join(tmp, 'cache');
 process.env.GITHUB_REPOSITORY = 'teste/manifests';
@@ -16,13 +17,15 @@ process.env.MAX_FILE_BYTES = '100';
 process.env.MAX_ZIP_BYTES = '50';
 
 const APPID = '123456';
+/** Fonte que estes testes usam: GITHUB_REPOSITORY vem primeiro na prioridade. */
+const SOURCE = 'github';
 const gh = await startMockGitHub({ branch: APPID, commit: 'a'.repeat(40) });
 process.env.GITHUB_API_URL = gh.url;
 
 const { getManifests, cacheStats, invalidate } = await import('../src/cache.js');
 const { SourceError } = await import('../src/githubSource.js');
 
-const metaFile = path.join(tmp, 'cache', APPID, 'meta.json');
+const metaFile = path.join(tmp, 'cache', SOURCE, APPID, 'meta.json');
 
 function rewriteMeta(patch) {
   const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
@@ -57,7 +60,7 @@ test('primeiro acesso baixa do GitHub e persiste no cache', async () => {
   assert.equal(gh.calls.contents, 2);
 
   assert.ok(fs.existsSync(metaFile), 'meta.json gravado');
-  const onDisk = fs.readFileSync(path.join(tmp, 'cache', APPID, 'files', '730.manifest'), 'utf8');
+  const onDisk = fs.readFileSync(path.join(tmp, 'cache', SOURCE, APPID, 'files', '730.manifest'), 'utf8');
   assert.equal(onDisk, 'manifest-a');
   assert.ok(meta.files.every((f) => typeof f.sha256 === 'string' && f.sha256.length === 64));
 });
@@ -83,7 +86,7 @@ test('refresh=1 força checagem do commit sob demanda', async () => {
   assert.equal(meta.files.length, 1, 'arquivos antigos removidos');
   assert.equal(gh.calls.branches, 1);
 
-  const content = fs.readFileSync(path.join(tmp, 'cache', APPID, 'files', '730.manifest'), 'utf8');
+  const content = fs.readFileSync(path.join(tmp, 'cache', SOURCE, APPID, 'files', '730.manifest'), 'utf8');
   assert.equal(content, 'manifest-novo');
 });
 
@@ -98,7 +101,7 @@ test('mudanca de commit invalida a entrada expirada automaticamente', async () =
   const meta = await getManifests(APPID);
   assert.equal(meta.commit, 'c'.repeat(40));
   assert.equal(meta.cached, false);
-  const content = fs.readFileSync(path.join(tmp, 'cache', APPID, 'files', '730.manifest'), 'utf8');
+  const content = fs.readFileSync(path.join(tmp, 'cache', SOURCE, APPID, 'files', '730.manifest'), 'utf8');
   assert.equal(content, 'terceira-versao');
 });
 
@@ -179,7 +182,7 @@ test('soma dos arquivos acima de MAX_ZIP_BYTES: zip_grande_demais', async () => 
 test('conteudo corrompido no cache e reparado na consulta', async () => {
   await getManifests(APPID);
   gh.resetCalls();
-  const file = path.join(tmp, 'cache', APPID, 'files', '730.manifest');
+  const file = path.join(tmp, 'cache', SOURCE, APPID, 'files', '730.manifest');
   fs.writeFileSync(file, 'CORROMPIDO'); // tamanho diferente
 
   const meta = await getManifests(APPID);
