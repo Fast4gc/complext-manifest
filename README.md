@@ -139,6 +139,14 @@ Modelo completo e comentado: `.env.example`.
 | `ADMIN_TOKEN` | Segredo das rotas `/admin/*` e (se `LINK_SECRET` vazio) dos links |
 | `DEFAULT_RATE_PER_MINUTE` | Rate limit por minuto, por chave (padrão 60) |
 
+> **Sobre `localhost:3000`:** os exemplos desta página e do `/docs` são locais.
+> Com `HOST=127.0.0.1` a API **só escuta na própria máquina** — abrir
+> `http://localhost:3000/health` de outro host ou de dentro de outro container
+> não funciona. Para acesso externo preencha `PUBLIC_BASE_URL` (também é o que
+> habilita os links temporários) e, se necessário, `HOST=0.0.0.0` atrás de um
+> proxy reverso. A página `/docs` monta os exemplos com o host de quem abriu
+> a página, não com `localhost` fixo.
+
 ### Fontes
 
 | Variável | Descrição |
@@ -207,6 +215,16 @@ Formato aceito de repositório: `nome-do-repo/nome-do-repo` (sem URL).
 4. Preencha `DISCORD_TOKEN` e `DISCORD_GUILD_ID` no `.env` e rode
    `./install.sh install --with-discord` (ou `./install.sh restart`).
 5. Convide o bot com `bot.commands` (scope `applications.commands`).
+
+> **Um aplicativo por bot.** O registro de comandos substitui a lista inteira
+> da guild (`PUT` em `applicationGuildCommands`). Se você reaproveitar o token
+> de outro bot, os comandos dele **somem** quando este subir — e, enquanto ele
+> não subir, você continua vendo os comandos antigos respondendo
+> "Comando desconhecido". Crie um aplicativo novo em
+> <https://discord.com/developers/applications> para o manifest-gate, copie o
+> token novo para `DISCORD_TOKEN` e reinicie. No boot o log lista exatamente
+> o que foi publicado (`/manifest, /busca`) e avisa se a guild já tinha
+> comandos de outro projeto.
 
 Comportamento do `/manifest appid:<AppID>`:
 

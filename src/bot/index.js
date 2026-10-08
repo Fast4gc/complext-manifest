@@ -111,10 +111,35 @@ async function registerCommands() {
     );
   }
 
+  // O PUT abaixo faz *bulk overwrite*: substitui TODOS os comandos da guild
+  // por esta lista. Se o mesmo aplicativo (token) estiver sendo usado por
+  // outro bot, os comandos dele somem aqui — por isso avisa ANTES.
+  try {
+    const existing = await rest.get(
+      Routes.applicationGuildCommands(client.application.id, guildId),
+    );
+    const known = new Set(COMMANDS.map((c) => c.name));
+    const foreign = (Array.isArray(existing) ? existing : [])
+      .map((c) => c?.name)
+      .filter((n) => n && !known.has(n));
+    if (foreign.length > 0) {
+      console.warn(
+        `AVISO: a guild ${guildId} tem comandos de OUTRO projeto neste mesmo aplicativo ` +
+          `(${foreign.map((n) => `/${n}`).join(', ')}). O registro do manifest-gate vai remove-los; ` +
+          'se eles forem de outro bot, use um token/aplicativo proprio no DISCORD_TOKEN.',
+      );
+    }
+  } catch (err) {
+    // Sem permissao ou lista vazia: nao impede o registro.
+    console.log('aviso: nao consegui ler os comandos atuais da guild:', err?.message || err);
+  }
+
   await rest.put(Routes.applicationGuildCommands(client.application.id, guildId), {
     body: COMMANDS,
   });
-  console.log('comandos /manifest e /busca registrados na guild');
+  console.log(
+    `comandos registrados na guild ${guildId}: ${COMMANDS.map((c) => `/${c.name}`).join(', ')}`,
+  );
 }
 
 client.once('clientReady', async () => {

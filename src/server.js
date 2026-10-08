@@ -303,17 +303,17 @@ Sem <code>source</code>, vale a ordem de <code>SOURCE_PRIORITY</code> com fallba
 A resposta traz <code>attempts</code> (quem foi consultado e qual codigo voltou)
 e os cabecalhos <code>X-Manifest-Gate-*</code> com fonte, origem, commit e data.</p>
 <h2>Exemplos</h2>
-<pre>curl -H "X-API-Key: SUA_CHAVE" "http://localhost:3000/manifests?id=123456"
-curl -H "X-API-Key: SUA_CHAVE" "http://localhost:3000/manifests?id=123456&source=manifesthub"
-curl -H "X-API-Key: SUA_CHAVE" "http://localhost:3000/search?q=counter-strike"
-curl -H "X-API-Key: SUA_CHAVE" "http://localhost:3000/sources"
-curl -OJ -H "X-API-Key: SUA_CHAVE" "http://localhost:3000/download?id=123456"
+<pre>curl -H "X-API-Key: SUA_CHAVE" "{{BASE}}/manifests?id=123456"
+curl -H "X-API-Key: SUA_CHAVE" "{{BASE}}/manifests?id=123456&source=manifesthub"
+curl -H "X-API-Key: SUA_CHAVE" "{{BASE}}/search?q=counter-strike"
+curl -H "X-API-Key: SUA_CHAVE" "{{BASE}}/sources"
+curl -OJ -H "X-API-Key: SUA_CHAVE" "{{BASE}}/download?id=123456"
 
-curl -X POST http://localhost:3000/links \\
+curl -X POST {{BASE}}/links \\
   -H "Content-Type: application/json" -H "X-API-Key: SUA_CHAVE" \\
   -d '{"id":"123456","source":"manifesthub","ttl":600}'
 
-curl -X POST http://localhost:3000/admin/keys \\
+curl -X POST {{BASE}}/admin/keys \\
   -H "Content-Type: application/json" -H "X-Admin-Token: SEU_TOKEN" \\
   -d '{"name":"cliente-1","maxUses":100}'</pre>
 <h2>Politica do pacote</h2>
@@ -330,7 +330,17 @@ publico: este servico nao baixa, nao guarda e nao entrega chaves de depot.
 <code>github_timeout</code>, <code>zip_grande_demais</code> entre outros.</p>
 </body></html>`;
 
-app.get('/docs', (_req, res) => res.type('html').send(DOCS_HTML));
+/**
+ * A pagina usa o host QUEM ABRIU para montar os exemplos: `localhost:3000`
+ * escrito no codigo so funciona na maquina da API e confunde quem acessa de
+ * fora (ou via Docker). `PUBLIC_BASE_URL` (se definido) manda na hora de
+ * mostrar a URL base; sem ele, vale o host da propria requisicao.
+ */
+app.get('/docs', (req, res) => {
+  const configured = config.links.publicBaseUrl;
+  const base = configured || `${req.protocol}://${req.get('host') || `localhost:${config.port}`}`;
+  res.type('html').send(DOCS_HTML.replaceAll('{{BASE}}', base));
+});
 
 /* ------------------------------------------------------------------ */
 /* Admin: gestao de chaves                                             */

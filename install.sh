@@ -351,9 +351,15 @@ cmd_install() {
   fi
 
   log "instalacao concluida."
-  local port
+  local port base
   port="$(env_get PORT || echo 3000)"
-  log "API: http://127.0.0.1:${port}/  (docs em /docs, health em /health)"
+  base="$(env_get PUBLIC_BASE_URL || true)"
+  if [ -n "$base" ]; then
+    log "API: ${base}/  (docs em /docs, health em /health)"
+  else
+    log "API: http://127.0.0.1:${port}/  (docs em /docs, health em /health)"
+    warn "esse endereco so abre NESTA maquina (HOST=127.0.0.1, PUBLIC_BASE_URL vazio). Para abrir de outro host, preencha PUBLIC_BASE_URL no .env e rode ./install.sh restart."
+  fi
   if [ "$INSTALL_MODE" = "discord" ]; then
     log "Bot: registre o comando /manifest na sua guild (ja registrado automaticamente)."
   fi
@@ -399,7 +405,7 @@ cmd_status() {
   url="http://127.0.0.1:${port}/health"
   if command -v curl >/dev/null 2>&1; then
     if curl -fsS -m 5 "$url" >/dev/null 2>&1; then
-      log "health check OK: $url"
+      log "health check OK: $url (checagem local: a API so escuta em 127.0.0.1)"
     else
       warn "health check nao respondeu: $url"
       exit 1
