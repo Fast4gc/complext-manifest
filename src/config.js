@@ -1,5 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+/** Raiz do projeto ancorada no arquivo, nao no cwd (painel pode abrir de outra pasta). */
+const FILE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 /**
  * Carrega .env (se existir) sem sobrescrever variáveis já presentes no ambiente.
@@ -25,7 +29,8 @@ function loadDotEnv(file) {
   }
 }
 
-loadDotEnv(process.env.ENV_FILE || path.resolve('.env'));
+export const ENV_FILE = process.env.ENV_FILE || path.join(FILE_ROOT, '.env');
+loadDotEnv(ENV_FILE);
 
 const num = (value, fallback) => {
   const n = Number(value);
@@ -53,7 +58,7 @@ function dir(base, value, fallback) {
   return path.resolve(base, value || fallback);
 }
 
-const PROJECT_ROOT = path.resolve('.') || process.cwd();
+const PROJECT_ROOT = FILE_ROOT;
 
 export const config = {
   port: num(process.env.PORT, 3000),

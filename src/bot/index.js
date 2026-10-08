@@ -87,6 +87,16 @@ const COMMANDS = [
   },
 ];
 
+function isMissingAccess(err) {
+  const code = err?.code ?? err?.rawError?.code;
+  const msg = String(err?.message || err || '');
+  return code === 50001 || /missing access/i.test(msg);
+}
+
+function inviteUrl(appId) {
+  return `https://discord.com/oauth2/authorize?client_id=${appId}&permissions=34816&scope=bot+applications.commands`;
+}
+
 async function registerCommands() {
   const rest = new REST({ version: '10' }).setToken(token);
 
@@ -131,15 +141,35 @@ async function registerCommands() {
     }
   } catch (err) {
     // Sem permissao ou lista vazia: nao impede o registro.
-    console.log('aviso: nao consegui ler os comandos atuais da guild:', err?.message || err);
+    // Missing Access aqui quase sempre = bot sem scope applications.commands.
+    if (isMissingAccess(err)) {
+      console.log(
+        `aviso: sem acesso para ler os comandos da guild ${guildId} (Missing Access). ` +
+          `O bot provavelmente foi convidado sem o scope applications.commands. ` +
+          `Reconvide com: ${inviteUrl(client.application.id)}`,
+      );
+    } else {
+      console.log('aviso: nao consegui ler os comandos atuais da guild:', err?.message || err);
+    }
   }
 
-  await rest.put(Routes.applicationGuildCommands(client.application.id, guildId), {
-    body: COMMANDS,
-  });
-  console.log(
-    `comandos registrados na guild ${guildId}: ${COMMANDS.map((c) => `/${c.name}`).join(', ')}`,
-  );
+  try {
+    await rest.put(Routes.applicationGuildCommands(client.application.id, guildId), {
+      body: COMMANDS,
+    });
+    console.log(
+      `comandos registrados na guild ${guildId}: ${COMMANDS.map((c) => `/${c.name}`).join(', ')}`,
+    );
+  } catch (err) {
+    if (isMissingAccess(err)) {
+      throw new Error(
+        `Missing Access na guild ${guildId}: o bot esta no servidor mas sem o scope applications.commands. ` +
+          `Reconvide o bot com: ${inviteUrl(client.application.id)} ` +
+          `e reinicie. (Detalhe original: ${err?.message || err})`,
+      );
+    }
+    throw err;
+  }
 }
 
 client.once('clientReady', async () => {

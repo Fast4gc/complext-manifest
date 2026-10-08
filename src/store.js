@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
 
-const DATA_DIR = process.env.DATA_DIR || path.resolve('data');
+const DATA_DIR = config.dataDir;
 const KEYS_FILE = path.join(DATA_DIR, 'keys.json');
 
 /** Formato aceito para a chave entregue ao cliente: mk_ + 32 chars alfanuméricos. */

@@ -316,7 +316,10 @@ function runScript(rel, label) {
     console.log(`  ${bold('▶')} Iniciando ${label}...`);
     console.log(`  ${dim('Ctrl+C no terminal encerra e volta ao painel')}`);
     console.log();
-    const child = spawn(process.execPath, [path.join(ROOT, rel)], { stdio: 'inherit' });
+    const child = spawn(process.execPath, [path.join(ROOT, rel)], {
+      stdio: 'inherit',
+      cwd: ROOT,
+    });
     const forward = () => {
       try {
         child.kill('SIGINT');
@@ -657,6 +660,72 @@ async function serviceStatusFlow() {
   await pause();
 }
 
+/** Roda o update do host (git pull + rebuild + restart) com saída no terminal. */
+function runHostUpdate() {
+  return new Promise((resolve) => {
+    if (process.stdin.isRaw) process.stdin.setRawMode(false);
+    inSpawn = true;
+    clear();
+    console.log(banner());
+    console.log();
+    console.log(`  ${bold('▶')} Atualizando via GitHub...`);
+    console.log(`  ${dim('Ctrl+C no terminal interrompe e volta ao painel')}`);
+    console.log();
+    const child = spawn('bash', [path.join(ROOT, 'install.sh'), 'update'], {
+      stdio: 'inherit',
+      cwd: ROOT,
+    });
+    const forward = () => {
+      try {
+        child.kill('SIGINT');
+      } catch {
+        /* já saiu */
+      }
+    };
+    process.on('SIGINT', forward);
+    child.on('exit', (code) => {
+      process.removeListener('SIGINT', forward);
+      inSpawn = false;
+      console.log();
+      console.log(`  ${dim(`atualização encerrada${code ? ` (código ${code})` : ''}`)}`);
+      console.log();
+      resolve(code ?? 0);
+    });
+  });
+}
+
+async function updateFlow() {
+  const inContainer = fs.existsSync('/.dockerenv') || !fs.existsSync(path.join(ROOT, 'install.sh'));
+  if (inContainer) {
+    frame('ATUALIZAR VIA GITHUB');
+    console.log(`  ${yellow('⚠')} ${yellow('Este painel está rodando DENTRO do container.')}`);
+    console.log(`  ${dim('O container é efêmero e não tem git nem Docker: o update precisa rodar no HOST.')}`);
+    console.log();
+    console.log(`  No host, na pasta do projeto, rode:`);
+    console.log(`    ${bold('cd ' + ROOT)}`);
+    console.log(`    ${bold('./install.sh update')}`);
+    console.log();
+    console.log(`  ${dim('Isso faz git pull + rebuild das imagens + restart, preservando .env e ./data.')}`);
+    await pause();
+    return;
+  }
+  frame('ATUALIZAR VIA GITHUB');
+  console.log('  Faz: git pull (se tiver .git) + rebuild das imagens + restart.');
+  console.log(`  ${dim('.env e ./data são preservados.')}\n`);
+  if (!fs.existsSync(path.join(ROOT, '.git'))) {
+    console.log(`  ${yellow('⚠')} ${yellow('Sem .git aqui: vai só rebuildar/reiniciar com o código atual.')}\n`);
+  }
+  const ok = await confirm('Atualizar agora?', { def: false });
+  if (!ok) return;
+  const code = await runHostUpdate();
+  if (code === 0) {
+    console.log(`  ${green('✓')} atualizado. Se o painel mostrar dados antigos, saia e abra de novo.`);
+  } else {
+    console.log(`  ${red('✗')} update saiu com código ${code} — veja as mensagens acima.`);
+  }
+  await pause();
+}
+
 /* ------------------------------------------------------------------ */
 /* Menus                                                               */
 /* ------------------------------------------------------------------ */
@@ -665,7 +734,7 @@ const MAIN_MENU = [
   { id: 'keys', icon: '🔑', label: 'Chaves de API', hint: 'criar · listar · revogar' },
   { id: 'manifests', icon: '📦', label: 'Manifests', hint: 'buscar jogo · consultar AppID · baixar ZIP' },
   { id: 'cache', icon: '🧠', label: 'Cache', hint: 'estatísticas · invalidar por AppID' },
-  { id: 'service', icon: '🌐', label: 'Serviço', hint: 'status · iniciar API · iniciar bot' },
+  { id: 'service', icon: '🌐', label: 'Serviço', hint: 'status · API · bot · atualizar' },
   { id: 'exit', icon: '🚪', label: 'Sair', hint: 'fechar o painel' },
 ];
 
@@ -693,6 +762,7 @@ const SERVICE_MENU = [
   { id: 'status', icon: '📡', label: 'Status do serviço' },
   { id: 'api', icon: '🚀', label: 'Iniciar servidor API', hint: `http://${config.host}:${config.port}` },
   { id: 'bot', icon: '🤖', label: 'Iniciar bot do Discord', hint: '/manifest · /busca' },
+  { id: 'update', icon: '🔄', label: 'Atualizar via GitHub', hint: 'git pull + rebuild + restart' },
   { id: 'back', icon: '⤺', label: 'Voltar ao menu principal' },
 ];
 
@@ -736,6 +806,8 @@ async function serviceMenu() {
     } else if (item.id === 'bot') {
       await runScript('src/bot/index.js', 'bot do Discord');
       await pause();
+    } else if (item.id === 'update') {
+      await updateFlow();
     }
   }
 }

@@ -340,10 +340,32 @@ ainda iniciar a API ou o bot do Discord:
 node src/cli.js        # ou: npm run key  ·  npm run menu
 ```
 
+Atalho (evita o comando grande do Docker):
+
+```bash
+./menu-painel.sh                 # abre o painel (host com Node, ou container)
+./menu-painel.sh key:list        # repassa args ao cli.js
+./menu-painel.sh --install       # cria o comando global `menu-painel`
+sudo menu-painel                 # abre de qualquer pasta (pede sudo sozinho no --install)
+```
+
+No Docker (host sem Node, como numa VPS), o mesmo painel
+abre dentro do container — o `-it` é obrigatório para a
+tela interativa (o `menu-painel.sh` já cuida disso):
+
+```bash
+docker compose run --rm -it --no-deps api node src/cli.js
+```
+
 Navegação: `↑` `↓` movem, `Enter` escolhe, `1-9` é atalho
 direto, `Esc` volta, `Ctrl+C` sai. Em ambiente sem terminal
 (pipe/Docker sem `-it`) o modo de comando acima é usado e o
 painel não trava o script.
+
+No menu `Serviço` há ainda **Atualizar via GitHub**: faz `git pull` +
+rebuild das imagens + restart (equivale a `./install.sh update`),
+preservando `.env` e `./data`. Dentro do container o painel avisa
+para rodar o update no host, pois o container é efêmero.
 
 ### Fluxo de validação do `/download`
 
