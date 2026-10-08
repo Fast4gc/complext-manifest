@@ -9,6 +9,7 @@
     "bot": "node src/bot/index.js",
     "dev": "node --watch src/server.js",
     "key": "node src/cli.js",
+    "menu": "node src/cli.js",
     "test": "node --test tests/*.test.js"
   },
   "engines": {

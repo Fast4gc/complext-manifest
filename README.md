@@ -48,7 +48,7 @@ credencial própria nossa.
 | Links (`src/links.js`) | Token HMAC com expiração, sem estado no servidor |
 | Cache (`src/cache.js`) | Persistente em `./data/cache/<fonte>/<appid>`, compartilhado por API e bot |
 | ZIP (`src/zip.js`) | Validação de entradas e da política antes de servir |
-| CLI (`src/cli.js`) | Gera/revoga chaves sem subir a API (usado pelo instalador) |
+| CLI (`src/cli.js`) | Gera/revoga chaves sem subir a API (usado pelo instalador); sem argumentos abre o painel (`src/menu.js`) |
 | Docker | `Dockerfile` + `docker-compose.yml` (API sempre; bot via perfil `discord`) |
 
 ---
@@ -327,6 +327,23 @@ node src/cli.js cache:stats
 node src/cli.js cache:invalidate <appid>
 # No Docker: docker compose run --rm --no-deps api node src/cli.js key:list
 ```
+
+### Painel interativo (menu)
+
+Rode **sem argumentos** — abre uma tela com todas as ações do
+backend: criar/listar/revogar chaves, buscar jogo por nome,
+consultar manifests de um AppID, baixar o ZIP, ver estatísticas
+da cache, invalidar entrada por AppID, ver o status do serviço e
+ainda iniciar a API ou o bot do Discord:
+
+```bash
+node src/cli.js        # ou: npm run key  ·  npm run menu
+```
+
+Navegação: `↑` `↓` movem, `Enter` escolhe, `1-9` é atalho
+direto, `Esc` volta, `Ctrl+C` sai. Em ambiente sem terminal
+(pipe/Docker sem `-it`) o modo de comando acima é usado e o
+painel não trava o script.
 
 ### Fluxo de validação do `/download`
 

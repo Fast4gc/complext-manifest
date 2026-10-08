@@ -3,14 +3,19 @@
  * CLI administrativo: criacao/revogacao de chaves sem subir a API.
  * Usado pelo instalador (dentro do container Docker) para gerar a chave do bot.
  *
+ * Modo comando (uma linha por chave — o instalador consome assim):
  *   node src/cli.js key:create [--name nome] [--uses N] [--expires ISO] [--rate N]
  *   node src/cli.js key:list
  *   node src/cli.js key:revoke <id>
  *   node src/cli.js cache:stats
  *   node src/cli.js cache:invalidate <appid>
+ *
+ * Sem argumentos abre o painel interativo (menu bonito com todas
+ * as acoes do backend):  node src/cli.js   ·   npm run key
  */
 import { createKey, listKeys, revokeKey } from './store.js';
 import { cacheStats, invalidate } from './cache.js';
+import { runMenu } from './menu.js';
 
 const [command, ...args] = process.argv.slice(2);
 
@@ -25,7 +30,8 @@ function flag(name, fallback = null) {
   return value;
 }
 
-switch (command) {
+function runCommand(command, args) {
+  switch (command) {
   case 'key:create': {
     const name = flag('name', 'sem-nome');
     const uses = flag('uses');
@@ -85,4 +91,12 @@ switch (command) {
   default:
     console.error('comando desconhecido. uso: key:create|key:list|key:revoke|cache:stats|cache:invalidate');
     process.exit(2);
+  }
+}
+
+/** Sem argumento: painel interativo. Com argumento: modo de máquina. */
+if (!command) {
+  runMenu();
+} else {
+  runCommand(command, args);
 }
