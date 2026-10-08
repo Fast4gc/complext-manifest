@@ -340,6 +340,14 @@ ainda iniciar a API ou o bot do Discord:
 node src/cli.js        # ou: npm run key  ·  npm run menu
 ```
 
+No Docker (host sem Node, como numa VPS), o mesmo painel
+abre dentro do container — o `-it` é obrigatório para a
+tela interativa:
+
+```bash
+docker compose run --rm -it --no-deps api node src/cli.js
+```
+
 Navegação: `↑` `↓` movem, `Enter` escolhe, `1-9` é atalho
 direto, `Esc` volta, `Ctrl+C` sai. Em ambiente sem terminal
 (pipe/Docker sem `-it`) o modo de comando acima é usado e o
