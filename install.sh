@@ -427,11 +427,14 @@ cmd_update() {
   have_docker || die "Docker indisponivel"
   if [ -d .git ]; then
     log "atualizando codigo (git pull)..."
-    git pull --ff-only || warn "git pull falhou; continuando com o codigo atual."
+    git pull --ff-only || die "git pull falhou; atualizacao interrompida."
+  else
+    log "atualizando codigo via bootstrap (instalacao sem .git)..."
+    bash "$PROJECT_DIR/bootstrap.sh" --dir "$PROJECT_DIR" --update --no-exec
   fi
   ensure_builder
   log "reconstruindo imagens..."
-  compose build --pull
+  compose build --pull api
   # shellcheck disable=SC2046
   compose $(current_profile_args) up -d
   log "atualizacao concluida."

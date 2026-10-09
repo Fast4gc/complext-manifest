@@ -11,6 +11,7 @@
  */
 import readline from 'node:readline';
 import { spawn } from 'node:child_process';
+import { serviceArgs } from './panelServices.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import archiver from 'archiver';
@@ -307,7 +308,11 @@ function showError(err) {
 }
 
 /** Roda um script do projeto (API/bot) com saída no terminal. */
-function runScript(rel, label) {
+function runScript(action, label) {
+  if (fs.existsSync('/.dockerenv')) {
+    console.log('Abra ./menu-painel.sh no host da VPS para controlar os servicos.');
+    return Promise.resolve();
+  }
   return new Promise((resolve) => {
     if (process.stdin.isRaw) process.stdin.setRawMode(false);
     inSpawn = true;
@@ -315,9 +320,9 @@ function runScript(rel, label) {
     console.log(banner());
     console.log();
     console.log(`  ${bold('▶')} Iniciando ${label}...`);
-    console.log(`  ${dim('Ctrl+C no terminal encerra e volta ao painel')}`);
+    console.log(`  ${dim('API e bot rodam no Docker. Sair dos logs nao encerra os servicos.')}`);
     console.log();
-    const child = spawn(process.execPath, [path.join(ROOT, rel)], {
+    const child = spawn('docker', serviceArgs(action), {
       stdio: 'inherit',
       cwd: ROOT,
     });
@@ -329,13 +334,21 @@ function runScript(rel, label) {
       }
     };
     process.on('SIGINT', forward);
-    child.on('exit', (code) => {
+    let finished = false;
+    const done = (code) => {
+      if (finished) return;
+      finished = true;
       process.removeListener('SIGINT', forward);
       inSpawn = false;
       console.log();
-      console.log(`  ${dim(`${label} encerrado${code ? ` (código ${code})` : ''}`)}`);
+      console.log(`  ${dim(`${label}: comando concluido${code ? ` (código ${code})` : ''}`)}`);
       console.log();
       resolve();
+    };
+    child.on('exit', done);
+    child.on('error', () => {
+      console.error('Nao foi possivel executar Docker no host. Confira a instalacao e as permissoes.');
+      done(1);
     });
   });
 }
@@ -782,6 +795,9 @@ const SERVICE_MENU = [
   { id: 'status', icon: '📡', label: 'Status do serviço' },
   { id: 'api', icon: '🚀', label: 'Iniciar servidor API', hint: `http://${config.host}:${config.port}` },
   { id: 'bot', icon: '🤖', label: 'Iniciar bot do Discord', hint: '/manifest · /busca' },
+  { id: 'stopbot', icon: '⏹', label: 'Parar bot do Discord' },
+  { id: 'logs', icon: '📜', label: 'Ver logs da API e do bot' },
+  { id: 'containers', icon: '📦', label: 'Ver containers em execucao' },
   { id: 'update', icon: '🔄', label: 'Atualizar via GitHub', hint: 'git pull + rebuild + restart' },
   { id: 'back', icon: '⤺', label: 'Voltar ao menu principal' },
 ];
@@ -822,10 +838,13 @@ async function serviceMenu() {
     if (!item || item.id === 'back') return;
     if (item.id === 'status') await serviceStatusFlow();
     else if (item.id === 'api') {
-      await runScript('src/server.js', 'servidor API');
+      await runScript('api', 'servidor API');
       await pause();
     } else if (item.id === 'bot') {
-      await runScript('src/bot/index.js', 'bot do Discord');
+      await runScript('bot', 'bot do Discord');
+      await pause();
+    } else if (['stopbot', 'logs', 'containers'].includes(item.id)) {
+      await runScript(item.id, item.label);
       await pause();
     } else if (item.id === 'update') {
       await updateFlow();

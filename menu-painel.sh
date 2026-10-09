@@ -2,8 +2,7 @@
 # ------------------------------------------------------------------
 # menu-painel.sh — atalho para abrir o painel do Manifest Gate.
 #
-# Evita decorar o comando grande do Docker:
-#   docker compose run --rm -it --no-deps api node src/cli.js
+# Painel executado no host; prepara Node e dependencias locais se necessario.
 #
 # Uso:
 #   ./menu-painel.sh                 # abre o painel interativo
@@ -25,8 +24,7 @@ usage() {
   cat <<'EOF'
 menu-painel.sh — atalho para abrir o painel do Manifest Gate.
 
-Evita decorar o comando grande do Docker:
-  docker compose run --rm -it --no-deps api node src/cli.js
+Painel no host: prepara Node e dependencias locais. API/bot usam Docker Compose.
 
 Uso:
   ./menu-painel.sh                 # abre o painel interativo
@@ -58,26 +56,54 @@ cmd_install() {
   echo "[menu-painel] uso: sudo menu-painel   (ou: menu-painel key:list)"
 }
 
-have_tty() { [ -t 0 ] && [ -t 1 ]; }
+# O painel sempre roda no host. API e bot continuam nos servicos Compose.
+prepare_runtime() {
+  if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1 &&
+     node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 22 ? 0 : 1)'; then
+    return
+  fi
+  local runtime_dir="${XDG_DATA_HOME:-$HOME/.local/share}/manifest-gate/node22"
+  if [ ! -x "$runtime_dir/bin/node" ]; then
+    local arch tmp archive checksum
+    case "$(uname -s):$(uname -m)" in
+      Linux:x86_64) arch=x64 ;;
+      Linux:aarch64|Linux:arm64) arch=arm64 ;;
+      *) echo "Instale Node 22+ e npm no host para abrir o painel." >&2; exit 1 ;;
+    esac
+    for cmd in curl tar xz sha256sum; do
+      command -v "$cmd" >/dev/null || { echo "Dependencia ausente no host: $cmd" >&2; exit 1; }
+    done
+    tmp="$(mktemp -d)"
+    echo "[menu-painel] preparando Node 22 no host..."
+    curl -fsSL https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt -o "$tmp/SHASUMS256.txt"
+    archive="$(awk -v arch="$arch" '$2 ~ ("^node-v22[.][0-9]+[.][0-9]+-linux-" arch "[.]tar[.]xz$") {print $2; exit}' "$tmp/SHASUMS256.txt")"
+    [ -n "$archive" ] || { echo "Nao consegui identificar o pacote Node." >&2; exit 1; }
+    checksum="$(awk -v name="$archive" '$2 == name {print $1}' "$tmp/SHASUMS256.txt")"
+    curl -fsSL "https://nodejs.org/dist/latest-v22.x/$archive" -o "$tmp/$archive"
+    (cd "$tmp"; printf '%s  %s\n' "$checksum" "$archive" | sha256sum -c -)
+    mkdir -p "$(dirname "$runtime_dir")"
+    tar -xJf "$tmp/$archive" -C "$tmp"
+    mv "$tmp/${archive%.tar.xz}" "$runtime_dir"
+    rm -rf "$tmp"
+  fi
+  export PATH="$runtime_dir/bin:$PATH"
+}
 
 open_panel() {
-  # 1) Host com Node + dependências: o mais simples, e é onde o
-  #    `Serviço > Atualizar via GitHub` consegue rodar (git + docker).
-  if command -v node >/dev/null 2>&1 && [ -f "$PROJECT_DIR/src/cli.js" ] && [ -d "$PROJECT_DIR/node_modules" ]; then
-    exec node "$PROJECT_DIR/src/cli.js" "$@"
-  fi
-  # 2) Fallback: painel dentro do container (host sem Node).
-  #    Nota: dentro do container o update precisa rodar no HOST —
-  #    o painel avisa isso na hora.
-  if ! command -v docker >/dev/null 2>&1; then
-    echo "ERRO: nem Node (com node_modules) nem Docker encontrados." >&2
-    echo "No host: instale o Node 20+ e rode npm ci; ou use ./install.sh install." >&2
+  if [ -f /.dockerenv ]; then
+    echo "Abra ./menu-painel.sh no HOST da VPS, fora do container." >&2
     exit 1
   fi
-  local tty_args=()
-  if have_tty; then tty_args=(-it); fi
-  exec docker compose -p manifest-gate -f "$PROJECT_DIR/docker-compose.yml" \
-    run --rm "${tty_args[@]+"${tty_args[@]}"}" --no-deps api node src/cli.js "$@"
+  prepare_runtime
+  local lock_hash installed_hash
+  lock_hash="$(sha256sum package-lock.json | cut -d ' ' -f 1)"
+  installed_hash="$(cat node_modules/.manifest-panel-lock 2>/dev/null || true)"
+  if [ "$lock_hash" != "$installed_hash" ] || [ ! -d node_modules/discord.js ]; then
+    echo "[menu-painel] preparando dependencias locais..."
+    npm ci --omit=dev --no-audit --no-fund
+    printf '%s\n' "$lock_hash" > node_modules/.manifest-panel-lock
+  fi
+  exec node "$PROJECT_DIR/src/cli.js" "$@"
 }
 
 case "${1:-}" in
