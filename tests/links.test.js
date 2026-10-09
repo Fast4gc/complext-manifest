@@ -52,7 +52,7 @@ const post = (url, body, headers = {}) =>
   json(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...headers },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ format: 'manifests', ...body }),
   });
 
 /* ------------------------------------------------------------------ */
@@ -187,7 +187,7 @@ test('POST /links emite link temporario e consome 1 uso', async () => {
   assert.match(r.body.url, /^https:\/\/manifest\.example\/links\/v1\./);
   assert.ok(!Number.isNaN(Date.parse(r.body.expiresAt)));
   assert.equal(r.body.ttlSeconds, 600);
-  assert.deepEqual(r.body.scope, { id: APPID, source: 'padrao' });
+  assert.deepEqual(r.body.scope, { id: APPID, source: 'github', format: 'manifests' });
   assert.match(r.body.note, /assinado/i);
   assert.ok(!JSON.stringify(r.body).includes(oneUse.key), 'chave nao volta na resposta');
 
@@ -200,7 +200,7 @@ test('POST /links emite link temporario e consome 1 uso', async () => {
 test('POST /links com fonte e ttl customizados', async () => {
   const r = await post('/links', { id: APPID, source: 'manifesthub', ttl: 120 }, { 'X-API-Key': KEY });
   assert.equal(r.status, 201);
-  assert.deepEqual(r.body.scope, { id: APPID, source: 'manifesthub' });
+  assert.deepEqual(r.body.scope, { id: APPID, source: 'manifesthub', format: 'manifests' });
   assert.equal(r.body.ttlSeconds, 120);
   const scope = readLink(r.body.url.split('/links/')[1]);
   assert.equal(scope.source, 'manifesthub');

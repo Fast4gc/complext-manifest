@@ -143,7 +143,7 @@ test('GET /manifests sem source entrega o ZIP pela fonte que deu certo', async (
   assert.equal(r.body.source, 'manifesthub');
   assert.equal(r.body.attempts[0].code, 'repositorio_invalido');
 
-  const dl = await get(`/download?id=${APPID}&key=${KEY}`);
+  const dl = await get(`/download?id=${APPID}&format=manifests&key=${KEY}`);
   assert.equal(dl.status, 200);
   assert.equal(dl.headers.get('x-manifest-gate-source'), 'manifesthub');
 });

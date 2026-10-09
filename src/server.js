@@ -7,6 +7,7 @@ import { createKey, listKeys, revokeKey, validateKey, consumeUse, KEY_FORMAT } f
 import { allow } from './rateLimit.js';
 import { normalizeAppId } from './validate.js';
 import { getManifests, cacheStats } from './cache.js';
+import { getLua } from './lua.js';
 import { SourceError, ERROR_MESSAGES, ping } from './githubSource.js';
 import { describeSources, REGISTRY } from './providers/index.js';
 import { searchGames, searchCacheStats, SEARCH_CODES } from './search.js';
@@ -37,6 +38,9 @@ const STATUS_BY_CODE = {
   limite_de_requisicoes: 429,
   branch_nao_encontrada: 404,
   sem_manifests: 404,
+  sem_lua: 404,
+  lua_ambiguo: 409,
+  formato_invalido: 400,
   arquivo_nao_encontrado: 404,
   arquivo_grande_demais: 413,
   zip_grande_demais: 413,
@@ -231,7 +235,7 @@ app.get('/status', (req, res) => {
     /** O que este servico NAO faz, para nao prometer de graça. */
     doesNot: [
       'gerar manifests a partir de um AppID',
-      'gerar ou distribuir chaves de depot (key.vdf, depotkeys, .lua, .json)',
+      'gerar chaves de depot ou arquivos Lua a partir de manifests',
       'executar arquivos recebidos (Lua e tratado como dado)',
       'consultar fontes que exigem login de terceiros',
     ],
@@ -279,18 +283,18 @@ query <code>key=&lt;chave&gt;</code>. Rotas <code>/admin/*</code> usam
 <table><tr><th>Rota</th><th>Descricao</th></tr>
 <tr><td><code>GET /health</code></td><td>Health check. <code>?deep=1</code> testa todas as fontes.</td></tr>
 <tr><td><code>GET /docs</code></td><td>Esta pagina.</td></tr>
-<tr><td><code>GET /links/&lt;token&gt;</code></td><td>ZIP via link temporario (token assinado, sem chave). Expira sozinho.</td></tr></table>
+<tr><td><code>GET /links/&lt;token&gt;</code></td><td>Lua ou ZIP via link temporario (token assinado, sem chave). Expira sozinho.</td></tr></table>
 <h2>Com chave de API</h2>
 <table><tr><th>Rota</th><th>Descricao</th></tr>
 <tr><td><code>GET /manifests?id=&lt;appid&gt;&amp;source=&lt;fonte&gt;&amp;refresh=1</code></td>
 <td>Lista os <code>.manifest</code> (baixaveis) e os <code>.lua/.json</code> (so descritos, com link direto).
 Cache com invalidacao por commit e proveniencia por pacote.</td></tr>
 <tr><td><code>GET /download?id=&lt;appid&gt;&amp;source=&lt;fonte&gt;</code></td>
-<td>ZIP com os <code>.manifest</code>. Consome 1 uso da chave.</td></tr>
+<td>Arquivo <code>&lt;appid&gt;.lua</code> original da fonte. Para ZIP de manifests, use <code>&amp;format=manifests</code>. Consome 1 uso da chave.</td></tr>
 <tr><td><code>GET /sources</code></td><td>Fontes disponiveis, prioridade e o que cada uma NAO faz.</td></tr>
 <tr><td><code>GET /search?q=&lt;nome&gt;</code></td><td>Pesquisa de nome &rarr; AppID (loja da Steam, fonte publica).</td></tr>
 <tr><td><code>GET /status</code></td><td>Status completo: fontes, cache, busca, links, limites.</td></tr>
-<tr><td><code>POST /links</code></td><td>Emite link temporario: <code>{id, source, ttl}</code>. Consome 1 uso.</td></tr></table>
+<tr><td><code>POST /links</code></td><td>Emite link temporario: <code>{id, source, ttl, format} (format: lua por padrao, ou manifests)</code>. Consome 1 uso.</td></tr></table>
 <h2>Admin (X-Admin-Token)</h2>
 <table><tr><th>Rota</th><th>Descricao</th></tr>
 <tr><td><code>POST /admin/keys</code></td><td>Cria chave: <code>{name, expiresAt, maxUses, rateLimitPerMinute}</code></td></tr>
@@ -321,10 +325,10 @@ curl -X POST {{BASE}}/admin/keys \\
 <code>.lua</code> e <code>.json</code> aparecem na listagem como
 <code>kind: "config"</code>, com <code>containsKeys: true</code>, o aviso
 <code>warning</code> e um <code>rawUrl</code> direto para o repositorio
-publico: este servico nao baixa, nao guarda e nao entrega chaves de depot.
+publico. O download padrao entrega o Lua existente; JSON permanece apenas listado.
 <code>*.vdf</code> nem e listado. Nada do conteudo recebido e executado.</p>
 <p>Codigos de erro claros: <code>branch_nao_encontrada</code>,
-<code>sem_manifests</code>, <code>fonte_desconhecida</code>,
+<code>sem_lua</code>, <code>lua_ambiguo</code>, <code>sem_manifests</code>, <code>fonte_desconhecida</code>,
 <code>fonte_desabilitada</code>, <code>nenhuma_fonte</code>,
 <code>github_auth</code>, <code>github_rate_limit</code>,
 <code>github_timeout</code>, <code>zip_grande_demais</code> entre outros.</p>
@@ -432,7 +436,7 @@ function listingPayload(appid, meta) {
 
     /** Quem foi consultado e qual codigo cada fonte devolveu. */
     attempts: meta.attempts || [],
-    download: `/download?id=${appid}${source ? `&source=${source}` : ''}`,
+    download: `/download?id=${appid}${source ? `&source=${source}` : ''}&format=manifests`,
   };
 }
 
@@ -489,6 +493,22 @@ function streamZip(res, meta) {
   archive.finalize();
 }
 
+function requestedFormat(value) {
+  const format = value ?? 'lua';
+  if (format !== 'lua' && format !== 'manifests') {
+    throw new SourceError('formato_invalido', ERROR_MESSAGES.formato_invalido);
+  }
+  return format;
+}
+
+function sendLua(res, file) {
+  provenanceHeaders(res, file);
+  res.setHeader('Content-Type', 'application/octet-stream');
+  res.setHeader('Content-Disposition', `attachment; filename="${file.filename}"`);
+  res.setHeader('X-Content-SHA256', file.sha256);
+  res.send(file.buffer);
+}
+
 async function handleDownload(req, res) {
   const key = requireApiKey(req, res);
   if (!key) return;
@@ -498,6 +518,12 @@ async function handleDownload(req, res) {
 
   let meta;
   try {
+    if (requestedFormat(req.query.format) === 'lua') {
+      const file = await getLua(appid, { source: requestedSource(req) });
+      sendLua(res, file);
+      consumeUse(key.id);
+      return;
+    }
     meta = await getManifests(appid, {
       source: requestedSource(req),
       refresh: req.query.refresh === '1',
@@ -540,10 +566,14 @@ async function handleCreateLink(req, res) {
 
   try {
     // Resolve AGORA para validar a fonte antes de prometer o link.
-    await getManifests(appid, { source });
+    const format = requestedFormat(req.body?.format ?? req.query.format);
+    const resolved = format === 'lua'
+      ? await getLua(appid, { source })
+      : await getManifests(appid, { source });
     const link = createLink({
-      source: source || '',
+      source: resolved.source,
       appid,
+      format,
       ttlSeconds: ttl,
       createdBy: key.id,
     });
@@ -551,7 +581,7 @@ async function handleCreateLink(req, res) {
     res.status(201).json({
       ...link,
       /** O link so carrega isto. Nada de chave ou credencial nele. */
-      scope: { id: appid, source: source || 'padrao' },
+      scope: { id: appid, source: resolved.source, format },
       note: 'Link assinado e com expiracao. Quem tiver o URL baixa; ele nao da acesso a mais nada.',
     });
   } catch (err) {
@@ -576,6 +606,11 @@ app.get('/links/:token', async (req, res, next) => {
 
     let meta;
     try {
+      if (scope.format === 'lua') {
+        const file = await getLua(scope.appid, { source: scope.source || null });
+        sendLua(res, file);
+        return;
+      }
       meta = await getManifests(scope.appid, { source: scope.source || null });
     } catch (err) {
       if (err instanceof SourceError) return failSource(res, err);

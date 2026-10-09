@@ -15,6 +15,8 @@ export class ApiError extends Error {
 /** Mensagens amigaveis por codigo de erro da API. */
 export const BOT_MESSAGES = {
   branch_nao_encontrada: 'Nao existe branch para esse AppID nas fontes configuradas.',
+  sem_lua: 'Nenhum .lua existente encontrado para esse AppID nas fontes consultadas.',
+  lua_ambiguo: 'A fonte tem varios .lua sem um arquivo identificado pelo AppID.',
   sem_manifests: 'Nenhum .manifest encontrado para esse AppID.',
   appid_invalido: 'AppID invalido. Use apenas numeros (ex.: 123456).',
   formato_de_chave_invalido: 'Chave da API invalida no servidor (contate o administrador).',
@@ -110,7 +112,7 @@ export function createApiClient({ baseUrl, key, timeoutMs = 30_000, fetchImpl = 
       );
     },
 
-    /** Baixa o ZIP dos manifests como Buffer. */
+    /** Baixa o Lua existente como Buffer, sem executa-lo. */
     async download(appid, { refresh = false, source } = {}) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -131,7 +133,16 @@ export function createApiClient({ baseUrl, key, timeoutMs = 30_000, fetchImpl = 
         throw new ApiError(code, BOT_MESSAGES[code] || body?.message || 'Erro na API.', res.status);
       }
       const buffer = Buffer.from(await res.arrayBuffer());
-      return { buffer, filename: `appid-${appid}-manifests.zip` };
+      const type = res.headers.get('content-type') || '';
+      const disposition = res.headers.get('content-disposition') || '';
+      if (!type.includes('application/octet-stream') || !disposition.includes(`filename="${appid}.lua"`)) {
+        throw new ApiError('resposta_invalida', BOT_MESSAGES.resposta_invalida, res.status);
+      }
+      return {
+        buffer, filename: `${appid}.lua`,
+        source: res.headers.get('x-manifest-gate-source'),
+        commit: res.headers.get('x-manifest-gate-version'),
+      };
     },
 
     /** Fontes configuradas: usada para montar o seletor do comando. */
@@ -144,7 +155,7 @@ export function createApiClient({ baseUrl, key, timeoutMs = 30_000, fetchImpl = 
       return call(`/search${qs({ q: query })}`);
     },
 
-    /** Emite um link temporario de download (quando o ZIP nao cabe no anexo). */
+    /** Emite um link temporario de download (quando o Lua nao cabe no anexo). */
     createLink(appid, { source, ttl } = {}) {
       return call('/links', { method: 'POST', json: { id: appid, source, ttl } });
     },

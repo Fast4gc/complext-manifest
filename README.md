@@ -1,16 +1,17 @@
 # Manifest Gate
 
-API + bot do Discord que buscam arquivos `.manifest` em repositórios GitHub
-com **uma branch por AppID**, com cache persistente, autenticação por chave,
-busca por nome de jogo e entrega em ZIP.
+API + bot do Discord que entregam o arquivo `.lua` existente em repositórios
+GitHub com **uma branch por AppID**, autenticação por chave e busca por nome.
 
-> **Escopo permitido de arquivos:** apenas `.manifest` (fixo no código).
-> `.lua`/`.json` (que carregam **chaves de depot**) são **só listados**, com
-> aviso e um link direto para o repositório público — nunca baixados, nunca
-> no cache e nunca no ZIP. Arquivos de chave (`key.vdf`, `*.vdf`, `*.key`,
-> `*.acf`, `depotkeys.json`) **nem aparecem na listagem**.
-> Este serviço **não destrava licença nem mexe em DRM**: não gera manifests,
-> não gera chaves, não executa arquivo recebido.
+`GET /download?id=<appid>` e `/manifest appid:<AppID>` entregam o Lua original.
+O arquivo `<appid>.lua` tem preferência; se não houver esse nome, só é aceito
+um único Lua na branch. Sem Lua, a API retorna `sem_lua` (404); vários candidatos
+sem correspondência retornam `lua_ambiguo` (409). A API não gera Lua a partir de
+manifests nem executa scripts. O exemplo local não é enviado às fontes.
+
+O ZIP antigo continua em `GET /download?id=<appid>&format=manifests`, com cache
+persistente. Lua é baixado diretamente da fonte, com validação de integridade,
+sem usar esse cache. JSON é apenas listado; VDF/KEY/ACF continuam excluídos.
 
 ## Fontes
 
@@ -229,16 +230,13 @@ Formato aceito de repositório: `nome-do-repo/nome-do-repo` (sem URL).
 Comportamento do `/manifest appid:<AppID>`:
 
 - responde **imediatamente** confirmando que está processando (com o AppID e
-  a fonte escolhida), envia uma segunda mensagem antes do download e edita a
-  última com o ZIP pronto;
+  a fonte escolhida) e edita a mensagem com o `.lua` pronto;
 - opção `fonte` com as escolhas vindo da API (`GET /sources`), mais fallback
   automático quando nada é escolhido;
-- o resumo final traz a **proveniência**: fonte, repositório, commit e se o
-  cache era novo ou antigo;
-- se houver `.lua`/`.json`, ele é **descrevido mas não anexado**, com aviso de
-  que contém chaves de depot e o link bruto do repositório público;
+- o resumo final traz a **proveniência**: fonte e commit;
+- anexa o `.lua` original; se não houver Lua na fonte, informa o erro;
 - cooldown por usuário (`DISCORD_COOLDOWN_SECONDS`);
-- se o ZIP exceder o limite de anexo, emite um **link temporário**
+- se o Lua exceder o limite de anexo, emite um **link temporário**
   (se `PUBLIC_BASE_URL` estiver configurado) com horário de expiração — e só
   se não houver link, aponta o endpoint da API;
 - se a API estiver fora do ar ou a chave for inválida, responde mensagem
@@ -265,8 +263,9 @@ Documentação interativa: `GET /docs`. Health: `GET /health`
 | `GET /sources` | chave | Fontes, ordem efetiva, credencial declarada e limites |
 | `GET /search?q=` | chave | Nome → AppID pela loja da Steam |
 | `GET /manifests?id=` | chave | Lista os `.manifest` + proveniência + `configFiles` |
-| `GET /download?id=` | chave | ZIP contendo **só** `.manifest` |
-| `POST /links` | chave | Emite link temporário de download |
+| `GET /download?id=` | chave | Arquivo `.lua` existente (padrão, ou `format=lua`) |
+| `GET /download?id=&format=manifests` | chave | ZIP contendo **só** `.manifest` |
+| `POST /links` | chave | Link temporário; `format` é `lua` por padrão ou `manifests` |
 | `GET /links/:token` | — (token HMAC) | Consome o link temporário |
 | `GET /docs` | — | Página de documentação |
 | `/admin/keys` | `X-Admin-Token` | Gerir chaves |
@@ -331,7 +330,7 @@ node src/cli.js cache:invalidate <appid>
 ### Painel interativo (menu)
 
 Rode **sem argumentos** — abre uma tela com todas as ações do
-backend: criar/listar/revogar chaves, buscar jogo por nome,
+backend: criar/listar/revogar chaves, buscar jogo por nome, baixar Lua,
 consultar manifests de um AppID, baixar o ZIP, ver estatísticas
 da cache, invalidar entrada por AppID, ver o status do serviço e
 ainda iniciar a API ou o bot do Discord:
@@ -376,6 +375,8 @@ para rodar o update no host, pois o container é efêmero.
 5. rate limit por chave (`429`)
 6. fonte escolhida por prioridade; se falhar, próxima (fallback). O resultado
    carrega `source`, `origin`, `version`, `fetchedAt` e `attempts`
+Para `format=manifests`, o fluxo continua:
+
 7. branch do AppID consultada; arquivos **classificados**: `manifest`
    baixado, `config` só listado, `forbidden` nem aparece
 8. caminho, tamanho e integridade validados (SHA1 do blob git + SHA-256 do
@@ -391,18 +392,16 @@ Cada AppID é um pacote. O que existe e o que sai:
 | Arquivo | Classe | Sai no ZIP? | Origem |
 |---|---|---|---|
 | `<appid>.manifest` e `<depot>_<manifest>.manifest` | `manifest` | **sim** | bruto da branch do AppID na fonte escolhida |
-| `<appid>.lua`, `<appid>.json` | `config` | **não** — só nome, tamanho, aviso e `rawUrl` | o bruto já está no repositório público; o serviço só aponta |
+| `<appid>.lua` | `config` | **não** — entregue diretamente pelo download padrão | bruto da branch do AppID |
+| `<appid>.json` | `config` | **não** — só listado | metadados e link da fonte |
 | `key.vdf`, `*.vdf`, `*.key`, `*.acf`, `depotkeys.json` | `forbidden` | **não, e nem na listagem** | — |
 
 O `rawUrl` aponta para `https://raw.githubusercontent.com/<repo>/refs/heads/<appid>/<arquivo>`,
 ou seja, **para o repositório público de origem** — o mesmo que um navegador
-abriria. Nenhum desses arquivos passa pelo servidor: não é baixado, não entra
-no disco do cache e não é incluído em resposta alguma.
-
-Um pacote **não pode conter** o que não existe na origem: o serviço nunca
-inventa manifest nem chave a partir de um AppID. Se a fonte só tem
-`.lua`/`.json`, a resposta diz isso (`count: 0` + `configFiles` com o motivo)
-em vez de prometer entregável.
+abriria. O Lua também pode ser baixado pelo endpoint autenticado `/download`.
+Um pacote não contém o que não existe na origem: o serviço não inventa
+manifests, scripts nem chaves a partir de um AppID. Branches apenas com Lua
+funcionam no download padrão, mesmo sem nenhum `.manifest`.
 
 ### Erros claros
 
@@ -515,12 +514,11 @@ Configurações (`./.env`) e cache (`./data`) são mantidos.
   chaves); respostas e erros do bot não ecoam credenciais.
 - **Nenhum token de terceiro vai embutido no código ou na imagem** — tudo
   entra pelo `.env` do operador.
-- Caminhos de arquivo validados contra traversal; apenas `.manifest`.
-- **Chave de depot nunca**: `key.vdf`, `*.vdf`, `*.key`, `*.acf`,
-  `depotkeys.json` e conteúdo do tipo `DecryptionKey` não são baixados,
-  guardados, listados ou servidos. `.lua`/`.json` só são apontados.
+- Caminhos validados contra traversal para `.manifest` e `.lua`.
+- `key.vdf`, `*.vdf`, `*.key`, `*.acf` e `depotkeys.json` continuam excluídos.
+  Lua é entregue como arquivo original; JSON é apenas listado.
 - Arquivos recebidos são tratados como **dado**: validados e servidos como
-  `application/zip`, nunca executados. Nenhum Lua é interpretado.
+  `application/octet-stream` (Lua) ou `application/zip`, nunca executados. Nenhum Lua é interpretado.
 - Links temporários: payload assinado HMAC-SHA256 com AppID, fonte e
   expiração; adulteração → `link_invalido`, data vencida → `link_expirado`
   (410), TTL fora do intervalo recusado, token limitado a 2 KB.
@@ -573,8 +571,8 @@ inexistente), para que segredos da sua máquina não mudem o resultado.
 
 - Somente extensão `.manifest` sai em ZIP (decisão de design; alterar exige
   mudar o código).
-- `.lua`/`.json` são **apontados, não entregues** — é uma escolha explícita
-  de política: o serviço não guarda chave de depot em disco nem a serve.
+- Lua precisa existir na fonte configurada: o arquivo não é gerado a partir
+  dos manifests. JSON permanece apenas listado.
 - O bot precisa de `DISCORD_API_KEY` no formato `mk_` + 32 caracteres.
 - Rate limit do GitHub sem token é baixo (~60 req/h); use `GITHUB_TOKEN`.
   Sem token, uma rajada de AppIDs distintos pode esgotar a cota — o erro é

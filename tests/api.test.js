@@ -184,7 +184,7 @@ test('segunda listagem usa cache (sem chamadas ao GitHub)', async () => {
 });
 
 test('/download entrega ZIP com os manifests e nada mais', async () => {
-  const res = await get(`/download?id=${APPID}&key=${KEY}`);
+  const res = await get(`/download?id=${APPID}&format=manifests&key=${KEY}`);
   assert.equal(res.status, 200);
   assert.equal(res.headers.get('content-type'), 'application/zip');
   assert.match(res.headers.get('content-disposition'), /attachment; filename="/);
@@ -198,7 +198,7 @@ test('/download entrega ZIP com os manifests e nada mais', async () => {
 });
 
 test('/download traz proveniencia nos cabecalhos', async () => {
-  const res = await get(`/download?id=${APPID}&key=${KEY}`);
+  const res = await get(`/download?id=${APPID}&format=manifests&key=${KEY}`);
   assert.equal(res.status, 200);
   assert.equal(res.headers.get('x-manifest-gate-source'), SOURCE);
   assert.equal(res.headers.get('x-manifest-gate-origin'), 'teste/manifests');
@@ -226,7 +226,7 @@ test('key.vdf e depotkeys.json nao aparecem nem na listagem nem no ZIP', async (
   assert.ok(!everything.includes('depotkeys'));
   assert.ok(!everything.includes('decryptionkey'), 'conteudo de chave nunca aparece');
 
-  const dl = await get(`/download?id=${APPID}&key=${KEY}`);
+  const dl = await get(`/download?id=${APPID}&format=manifests&key=${KEY}`);
   assert.equal(dl.status, 200);
   const entries = new AdmZip(Buffer.from(dl.body)).getEntries().map((e) => e.entryName);
   assert.deepEqual(entries, ['730.manifest']);
@@ -296,9 +296,9 @@ test('POST /links sem PUBLIC_BASE_URL responde 503 link_desabilitado', async () 
 
 test('download consome 1 uso da chave e respeita maxUses', async () => {
   const limited = createKey({ name: 'usos', maxUses: 1, rateLimitPerMinute: 1000 });
-  const first = await get(`/download?id=${APPID}&key=${limited.key}`);
+  const first = await get(`/download?id=${APPID}&format=manifests&key=${limited.key}`);
   assert.equal(first.status, 200);
-  const second = await get(`/download?id=${APPID}&key=${limited.key}`);
+  const second = await get(`/download?id=${APPID}&format=manifests&key=${limited.key}`);
   assert.equal(second.status, 403);
   assert.equal(second.body.error, 'limite_de_usos_atingido');
 });
@@ -357,14 +357,14 @@ test('GitHub no limite: 503 github_rate_limit', async () => {
 });
 
 test('cache stale e servido quando o GitHub cai (X-Cache: stale)', async () => {
-  await get(`/download?id=${APPID}&key=${KEY}`); // popula cache
+  await get(`/download?id=${APPID}&format=manifests&key=${KEY}`); // popula cache
   // Expira o TTL e joga o GitHub para baixo.
   const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
   meta.checkedAt = '2000-01-01T00:00:00.000Z';
   fs.writeFileSync(metaFile, JSON.stringify(meta));
   gh.setMode('down');
 
-  const res = await get(`/download?id=${APPID}&key=${KEY}`);
+  const res = await get(`/download?id=${APPID}&format=manifests&key=${KEY}`);
   assert.equal(res.status, 200);
   assert.equal(res.headers.get('x-cache'), 'stale');
 });
@@ -409,7 +409,7 @@ test('admin: body invalido responde 400', async () => {
 test('logs nao registram a chave (query string ignorada)', async () => {
   // O middleware registra apenas req.path; garantimos que /download responde
   // e que nenhuma parte da resposta ecoa a chave.
-  const res = await get(`/download?id=${APPID}&key=${KEY}`);
+  const res = await get(`/download?id=${APPID}&format=manifests&key=${KEY}`);
   assert.equal(res.status, 200);
   assert.equal(JSON.stringify(res.headers).includes(KEY), false);
 });

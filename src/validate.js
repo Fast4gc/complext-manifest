@@ -122,19 +122,13 @@ export function parseManifestName(name) {
  * Classifica um arquivo encontrado na fonte.
  *
  *  manifest  .manifest               -> baixado, em cache, entregue no ZIP
- *  config    .lua / .json            -> SO listado (nome, tamanho, link)
+ *  config    .lua / .json            -> metadados; Lua tem download separado
  *  forbidden chaves (key.vdf, .vdf)   -> NUNCA listado nem entregue
  *  ignored   qualquer outro          -> fora do escopo
  *
- * POLITICA DE ENTREGA (definida pelo operador): nenhuma chave de depot e
- * baixada, guardada ou servida por este servico.
- *
- * Verificado ao vivo no ManifestHub (branch 730): o `730.lua` traz
- * `addappid(732,0,"da1f7691...")`, que e exatamente o `"DecryptionKey"
- * "da1f7691..."` do `key.vdf`, e o `730.json` traz 15 `decryptionkey`.
- * Por isso `.lua`/`.json` entram como `config` com `containsKeys: true`
- * e um link direto ao repositorio publico: quem precisar busca por conta
- * propria. O conteudo deles NUNCA toca o disco do servico nem o ZIP.
+ * O cache e o ZIP de manifests usam apenas a classe manifest.
+ * O download Lua seleciona explicitamente um .lua da classe config.
+ * JSON continua apenas listado; arquivos forbidden nao sao entregues.
  *
  * Trata todo arquivo como DADO: nada aqui executa, interpreta ou avalia
  * scripts Lua (ou qualquer outro conteudo recebido).
@@ -148,7 +142,7 @@ const FORBIDDEN_PATTERNS = [
   /\.acf$/i,
 ];
 
-/** Arquivos de configuracao: aparecem na listagem, mas nunca sao baixados. */
+/** Arquivos de configuracao: Lua pode ser selecionado para download separado. */
 const CONFIG_PATTERNS = [/\.lua$/i, /\.json$/i];
 
 export function fileKind(p) {
@@ -161,7 +155,7 @@ export function fileKind(p) {
 
 /**
  * true se o arquivo deve ser baixado e guardado em cache.
- * Apenas `.manifest`: chave/config NUNCA toca o disco do servico.
+ * Apenas `.manifest` entra no cache; Lua usa download direto.
  */
 export function isDownloadable(p) {
   return fileKind(p) === 'manifest';
@@ -178,7 +172,7 @@ export function isListable(p) {
  * Motivo: esses arquivos carregam chaves de descriptografia de depot.
  */
 export const CONTAINS_KEYS_WARNING =
-  'Contem chaves de descriptografia de depot. Nao e baixado nem servido por este servico.';
+  'Pode conter chaves de depot. Lua pode ser baixado separadamente; JSON e apenas listado.';
 
 /**
  * URL bruta (raw) para o cliente buscar um arquivo de configuracao direto

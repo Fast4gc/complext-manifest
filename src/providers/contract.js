@@ -131,10 +131,10 @@ export function githubBranchProvider({ id, name, src, enabled, configured, extra
      * Baixa um `.manifest` no commit registrado no proprio arquivo.
      * Sem `ref` (arquivo vindo de fora do cache), consulta a branch.
      */
-    async download(appid, file, { signal, ref } = {}) {
+    async download(appid, file, { signal, ref, format } = {}) {
       const s = full();
       const sha = ref || (await branchHead(appid, { signal, src: s })).sha;
-      return fetchFile(appid, file, sha, { signal, src: s });
+      return fetchFile(appid, file, sha, { signal, src: s, format });
     },
 
     async ping() {

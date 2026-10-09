@@ -52,7 +52,8 @@ export function linksEnabled() {
  * @returns {{token, url, expiresAt, ttlSeconds}}
  * @throws {Error} com `.code` link_*
  */
-export function createLink({ source, appid, ttlSeconds, createdBy }) {
+export function createLink({ source, appid, ttlSeconds, createdBy, format = 'manifests' }) {
+  if (!['lua', 'manifests'].includes(format)) throw linkError('link_invalido');
   if (!config.links.publicBaseUrl) throw linkError('link_desabilitado');
   const key = secretKey();
   if (!key) throw linkError('link_sem_segredo');
@@ -65,6 +66,7 @@ export function createLink({ source, appid, ttlSeconds, createdBy }) {
   const payload = {
     s: String(source),
     a: String(appid),
+    ...(format === 'lua' ? { f: 'lua' } : {}),
     e: Math.floor(now / 1000) + Math.floor(ttl),
     c: Math.floor(now / 1000),
     ...(createdBy ? { u: String(createdBy).slice(0, 64) } : {}),
@@ -117,12 +119,14 @@ export function readLink(token) {
     throw linkError('link_invalido');
   }
   if (!Number.isFinite(payload.e)) throw linkError('link_invalido');
+  if (payload.f !== undefined && payload.f !== 'lua') throw linkError('link_invalido');
 
   if (payload.e * 1000 <= Date.now()) throw linkError('link_expirado');
 
   return {
     source: payload.s,
     appid: String(payload.a),
+    format: payload.f || 'manifests',
     expiresAt: new Date(payload.e * 1000).toISOString(),
     createdAt: new Date(payload.c * 1000).toISOString(),
     ...(payload.u ? { createdBy: payload.u } : {}),

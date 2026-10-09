@@ -188,11 +188,7 @@ export const config = {
     defaultRatePerMinute: num(process.env.DEFAULT_RATE_PER_MINUTE, 60),
   },
 
-  /**
-   * Unica extensao que e baixada, guardada em cache e entregue num ZIP.
-   * Fixo no codigo de propósito: `.lua`/`.json` contem chaves de depot e
-   * sao apenas LISTADOS; `*.vdf` nem isso (ver src/validate.js).
-   */
+  /** Extensao do cache e ZIP de manifests; Lua usa download direto. */
   allowedExtension: '.manifest',
 
   discord: {

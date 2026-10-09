@@ -17,6 +17,7 @@ import archiver from 'archiver';
 import { fileURLToPath } from 'node:url';
 import { createKey, listKeys, revokeKey } from './store.js';
 import { cacheStats, getManifests, invalidate } from './cache.js';
+import { getLua } from './lua.js';
 import { searchGames } from './search.js';
 import { assertZipPolicy, validateZipEntries, zipFilename } from './zip.js';
 import { SourceError } from './providers/index.js';
@@ -77,7 +78,7 @@ function banner() {
   const inner = WIDTH() - 4;
   const line = '═'.repeat(inner);
   const title = ` ⚡ ${PROJECT_NAME.toUpperCase()} — PAINEL DE CONTROLE`;
-  const sub = ` API de download de manifests · v${VERSION}`;
+  const sub = ` API de download de Lua e manifests · v${VERSION}`;
   return [
     `╔${line}╗`,
     `║${padRow(cyan(title), inner)}║`,
@@ -540,6 +541,24 @@ async function manifestsFlow() {
   await pause();
 }
 
+async function downloadLuaFlow() {
+  frame('BAIXAR ARQUIVO LUA');
+  const picked = await askAppIdAndSource();
+  if (!picked) return;
+  try {
+    const file = await getLua(picked.appid, { source: picked.source });
+    const out = path.resolve(process.cwd(), file.filename);
+    if (fs.existsSync(out) && !await confirm(`Substituir ${out}?`)) return;
+    fs.writeFileSync(out, file.buffer);
+    frame('LUA PRONTO');
+    console.log(`  ${green('✓')} ${out} · ${fmtBytes(file.size)} · ${file.source}`);
+  } catch (err) {
+    frame('DOWNLOAD FALHOU');
+    showError(err);
+  }
+  await pause();
+}
+
 async function downloadZipFlow() {
   frame('BAIXAR ZIP DE MANIFESTS');
   const picked = await askAppIdAndSource();
@@ -732,7 +751,7 @@ async function updateFlow() {
 
 const MAIN_MENU = [
   { id: 'keys', icon: '🔑', label: 'Chaves de API', hint: 'criar · listar · revogar' },
-  { id: 'manifests', icon: '📦', label: 'Manifests', hint: 'buscar jogo · consultar AppID · baixar ZIP' },
+  { id: 'manifests', icon: '📦', label: 'Manifests', hint: 'buscar jogo · baixar Lua · ZIP de manifests' },
   { id: 'cache', icon: '🧠', label: 'Cache', hint: 'estatísticas · invalidar por AppID' },
   { id: 'service', icon: '🌐', label: 'Serviço', hint: 'status · API · bot · atualizar' },
   { id: 'exit', icon: '🚪', label: 'Sair', hint: 'fechar o painel' },
@@ -747,6 +766,7 @@ const KEYS_MENU = [
 
 const MANIFESTS_MENU = [
   { id: 'search', icon: '🔍', label: 'Buscar jogo por nome', hint: 'nome → AppID (loja da Steam)' },
+  { id: 'lua', icon: '⬇️', label: 'Baixar arquivo .lua' },
   { id: 'consult', icon: '📋', label: 'Consultar manifests de um AppID' },
   { id: 'download', icon: '⬇️', label: 'Baixar ZIP de manifests' },
   { id: 'back', icon: '⤺', label: 'Voltar ao menu principal' },
@@ -781,6 +801,7 @@ async function manifestsMenu() {
     const item = await select('MANIFESTS', MANIFESTS_MENU);
     if (!item || item.id === 'back') return;
     if (item.id === 'search') await searchFlow();
+    else if (item.id === 'lua') await downloadLuaFlow();
     else if (item.id === 'consult') await manifestsFlow();
     else if (item.id === 'download') await downloadZipFlow();
   }

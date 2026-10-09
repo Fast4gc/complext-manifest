@@ -4,7 +4,7 @@ import { ApiError } from './apiClient.js';
 /**
  * Fluxo do comando /manifest, sem depender do Discord (testavel isoladamente).
  *
- * Ordem: valida -> cooldown -> lista -> baixa -> anexa (ou oferece link).
+ * Ordem: valida -> cooldown -> baixa Lua -> anexa (ou oferece link).
  * A confirmacao enquanto processa vem de `onProgress`: o chamador mostra a
  * mensagem antes de a API responder, e o resultado final substitui.
  *
@@ -41,61 +41,28 @@ export async function runManifestCommand({
   cooldown.hit(userId);
 
   await onProgress?.(
-    `Consultando AppID **${appid}**` + (source ? ` na fonte \`${source}\`` : ' (prioridade do servidor)') + '…',
+    `Baixando Lua do AppID **${appid}**` + (source ? ` na fonte \`${source}\`` : ' (prioridade do servidor)') + '…',
   );
 
-  const list = await api.listManifests(appid, { source });
-
-  if (!list || list.count === 0) {
-    const cfgNote =
-      list?.configCount > 0
-        ? `\nHá \`config\` para este AppID (${list.configFiles.map((f) => f.name).join(', ')}), ` +
-          'mas ela contém chaves de depot e este bot não a entrega.'
-        : '';
-    return { content: `Nenhum .manifest encontrado para o AppID **${appid}**.${cfgNote}` };
-  }
-
-  await onProgress?.(
-    `**${list.count}** manifest(s) localizados${source ? ` em \`${source}\`` : ''}. Baixando o ZIP…`,
-  );
-
-  const { buffer, filename } = await api.download(appid, { source });
-
+  const { buffer, filename, ...provenance } = await api.download(appid, { source });
+  const list = { ...provenance, count: 1, totalBytes: buffer.length };
   if (buffer.length > maxBytes) {
-    return await tooBig({ api, appid, source, list, buffer, maxBytes });
+    return await tooBig({ api, appid, source: provenance.source || source, list, buffer, maxBytes });
   }
-
+  const commit = String(provenance.commit || '').slice(0, 7);
   return {
-    content: summary(list, { appid, buffer }),
+    content: [
+      `Arquivo Lua do AppID **${appid}**`,
+      provenance.source ? `fonte \`${provenance.source}\`` : null,
+      commit ? `commit \`${commit}\`` : null,
+      `${(buffer.length / 1024).toFixed(1)} KB`,
+    ].filter(Boolean).join(' · '),
     files: [{ attachment: buffer, name: filename }],
   };
 }
 
-/** Resumo final com proveniencia do pacote. */
-function summary(list, { appid, buffer }) {
-  const commit = String(list.commit || list.version || '').slice(0, 7);
-  const parts = [
-    `**${list.count}** manifest(s) do AppID **${appid}**`,
-    commit ? `commit \`${commit}\`` : null,
-    list.source ? `fonte \`${list.source}\`` : null,
-    list.origin ? `repo \`${list.origin}\`` : null,
-    list.stale ? '⚠ cache antigo (fonte indisponível)' : null,
-    `${(buffer.length / 1024).toFixed(0)} KB`,
-  ].filter(Boolean);
-
-  let out = parts.join(' · ');
-
-  if (list.configCount > 0) {
-    const names = (list.configFiles || []).map((f) => f.name).join(', ');
-    out += `\n_Não incluído:_ \`${names}\` — contém chaves de depot; este bot não entrega chave.`;
-    const raw = (list.configFiles || []).find((f) => f.rawUrl)?.rawUrl;
-    if (raw) out += `\nBusque direto no repositório: <${raw}>`;
-  }
-  return out;
-}
-
 /**
- * ZIP acima do limite de anexo do Discord.
+ * Lua acima do limite de anexo do Discord.
  * Primeiro tenta um link temporario (expira sozinho); se nao houver
  * PUBLIC_BASE_URL, avisa como usar a API direto.
  */
@@ -103,7 +70,7 @@ async function tooBig({ api, appid, source, list, buffer, maxBytes }) {
   const mb = (buffer.length / (1024 * 1024)).toFixed(1);
   const limitMb = (maxBytes / (1024 * 1024)).toFixed(0);
   const base =
-    `O pacote do AppID **${appid}** tem **${list.count}** arquivo(s), ` +
+    `O arquivo Lua do AppID **${appid}** tem **${list.count}** arquivo(s), ` +
     `**${((list.totalBytes || 0) / (1024 * 1024)).toFixed(1)} MB** e ficou com ${mb} MB, ` +
     `acima do limite de anexo do Discord (${limitMb} MB).`;
 

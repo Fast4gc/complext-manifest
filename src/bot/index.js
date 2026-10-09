@@ -1,7 +1,7 @@
 /**
  * Bot do Discord.
  *
- *   /manifest appid:<AppID> [fonte:<id>]   lista e baixa o ZIP de manifests
+ *   /manifest appid:<AppID> [fonte:<id>]   baixa o arquivo Lua existente
  *   /busca   nome:<texto>                  pesquisa nome -> AppID
  *
  * Consome a mesma API do backend (DISCORD_API_URL + DISCORD_API_KEY): o bot
@@ -58,7 +58,7 @@ const SOURCE_OPTION = {
 const COMMANDS = [
   {
     name: 'manifest',
-    description: 'Baixa o ZIP com os manifests disponiveis para um AppID',
+    description: 'Baixa o arquivo .lua disponivel para um AppID',
     options: [
       {
         type: 4, // INTEGER
@@ -209,7 +209,7 @@ client.on('interactionCreate', async (interaction) => {
       await interaction.deferReply();
       await progress(
         interaction,
-        `Buscando manifests do AppID **${appid}**` +
+        `Buscando Lua do AppID **${appid}**` +
           (source ? ` na fonte \`${source}\`` : '') +
           '…',
       );
@@ -255,7 +255,7 @@ client.on('interactionCreate', async (interaction) => {
       await interaction.editReply({
         content:
           `Resultados para **${found.query}**:\n${lines.join('\n')}\n` +
-          `\nUse \`/manifest appid:<AppID>\` para baixar os manifests.`,
+          `\nUse \`/manifest appid:<AppID>\` para baixar o .lua.`,
       });
       return;
     }

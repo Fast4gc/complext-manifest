@@ -32,265 +32,68 @@ test('cooldown 0 desabilita limite', () => {
 /* Fluxo do comando /manifest (sem Discord)                            */
 /* ------------------------------------------------------------------ */
 
-function stubApi(overrides = {}) {
-  const calls = { list: 0, download: 0, link: 0, listOpts: [], downloadOpts: [] };
-  const api = {
+function stubApi() {
+  const calls = [];
+  return {
     calls,
-    listManifests: async (appid, opts) => {
-      calls.list += 1;
-      calls.listOpts.push(opts ?? {});
-      return overrides.list ?? { count: 1, commit: 'abcdef123456', totalBytes: 10, stale: false };
-    },
     download: async (appid, opts) => {
-      calls.download += 1;
-      calls.downloadOpts.push(opts ?? {});
-      return overrides.download ?? { buffer: Buffer.from('zip-bytes'), filename: 'x.zip' };
+      calls.push({ appid, ...opts });
+      return { buffer: Buffer.from('addappid(730)'), filename: '730.lua', source: 'github', commit: 'abcdef123' };
     },
+    listManifests: () => { throw new Error('Lua nao deve consultar/baixar manifests'); },
   };
-  if (overrides.link !== null) {
-    api.createLink = async (appid, opts) => {
-      calls.link += 1;
-      calls.linkOpts = opts ?? {};
-      return (
-        overrides.link ?? {
-          url: 'http://api.test/links/abc.def.ghi',
-          expiresAt: '2030-01-01T00:00:00.000Z',
-        }
-      );
-    };
-  }
-  return api;
 }
+const run = (api, extra = {}) => runManifestCommand({
+  appid: '730', api, cooldown: createCooldown(0), userId: 'u', maxBytes: 1024, ...extra,
+});
 
-test('AppID invalido responde aviso sem chamar a API', async () => {
+test('AppID invalido nao chama a API', async () => {
   const api = stubApi();
-  const res = await runManifestCommand({
-    appid: 'abc',
-    api,
-    cooldown: createCooldown(30),
-    userId: 'u1',
-    maxBytes: 1024,
-  });
-  assert.match(res.content, /AppID invalido/);
-  assert.equal(api.calls.list, 0);
+  assert.match((await run(api, { appid: 'abc' })).content, /AppID invalido/);
+  assert.equal(api.calls.length, 0);
 });
-
-test('cooldown responde tempo de espera', async () => {
+test('cooldown impede repetir download', async () => {
   const api = stubApi();
-  const cd = createCooldown(60);
-  await runManifestCommand({ appid: '730', api, cooldown: cd, userId: 'u1', maxBytes: 1024 });
-  const res = await runManifestCommand({ appid: '730', api, cooldown: cd, userId: 'u1', maxBytes: 1024 });
-  assert.match(res.content, /Aguarde/);
-  assert.equal(api.calls.list, 1, 'nao consultou a API de novo');
+  const cooldown = createCooldown(60);
+  await run(api, { cooldown });
+  assert.match((await run(api, { cooldown })).content, /Aguarde/);
+  assert.equal(api.calls.length, 1);
 });
-
-test('sem manifests: resposta amigavel', async () => {
-  const api = stubApi({ list: { count: 0 } });
-  const res = await runManifestCommand({
-    appid: '730',
-    api,
-    cooldown: createCooldown(30),
-    userId: 'u',
-    maxBytes: 1024,
-  });
-  assert.match(res.content, /Nenhum \.manifest/);
-  assert.equal(api.calls.download, 0);
-});
-
-test('sucesso devolve anexo com ZIP e resumo do commit', async () => {
-  const api = stubApi();
-  const res = await runManifestCommand({
-    appid: '730',
-    api,
-    cooldown: createCooldown(30),
-    userId: 'u',
-    maxBytes: 1024 * 1024,
-  });
-  assert.match(res.content, /abcdef1/);
-  assert.equal(res.files.length, 1);
-  assert.equal(res.files[0].name, 'x.zip');
-  assert.ok(Buffer.isBuffer(res.files[0].attachment));
-});
-
-test('ZIP acima do limite do Discord: avisa sem anexar', async () => {
-  const api = stubApi({
-    list: { count: 3, commit: 'abcdef123456', totalBytes: 9 * 1024 * 1024, stale: false },
-    download: { buffer: Buffer.alloc(9 * 1024 * 1024), filename: 'big.zip' },
-    link: null, // servidor sem PUBLIC_BASE_URL: sem link disponivel
-  });
-  const res = await runManifestCommand({
-    appid: '730',
-    api,
-    cooldown: createCooldown(30),
-    userId: 'u',
-    maxBytes: 8 * 1024 * 1024,
-  });
-  assert.match(res.content, /limite de anexo do Discord/);
-  assert.match(res.content, /GET \/download/);
-  assert.equal(res.files, undefined);
-});
-
-test('ZIP acima do limite: oferece link temporario com expiracao', async () => {
-  const api = stubApi({
-    list: { count: 3, commit: 'abcdef123456', totalBytes: 9 * 1024 * 1024, stale: false },
-    download: { buffer: Buffer.alloc(9 * 1024 * 1024), filename: 'big.zip' },
-  });
-  const res = await runManifestCommand({
-    appid: '730',
-    api,
-    cooldown: createCooldown(30),
-    userId: 'u',
-    maxBytes: 8 * 1024 * 1024,
-  });
-  assert.match(res.content, /limite de anexo do Discord/);
-  assert.match(res.content, /<http:\/\/api\.test\/links\/abc\.def\.ghi>/);
-  assert.match(res.content, /Expira em/);
-  assert.equal(res.files, undefined, 'nao anexa o ZIP');
-  assert.equal(api.calls.link, 1);
-});
-
-test('ZIP grande com link recusado pela API cai no aviso sem vazar erro', async () => {
-  const api = stubApi({
-    list: { count: 3, totalBytes: 9 * 1024 * 1024 },
-    download: { buffer: Buffer.alloc(9 * 1024 * 1024), filename: 'big.zip' },
-    link: null,
-  });
-  // Simula o servidor com PUBLIC_BASE_URL ligado mas LINK_SECRET ausente.
-  api.createLink = async () => {
-    throw new ApiError('link_desabilitado', BOT_MESSAGES.link_desabilitado, 503);
-  };
-  const res = await runManifestCommand({
-    appid: '730',
-    api,
-    cooldown: createCooldown(30),
-    userId: 'u',
-    maxBytes: 8 * 1024 * 1024,
-  });
-  assert.match(res.content, /GET \/download/);
-  assert.doesNotMatch(res.content, /link_desabilitado/, 'codigo interno nao vaza');
-  assert.equal(res.files, undefined);
-});
-
-test('fonte escolhida e repassada para listagem e download', async () => {
-  const api = stubApi();
-  await runManifestCommand({
-    appid: '730',
-    api,
-    cooldown: createCooldown(0),
-    userId: 'u',
-    maxBytes: 1024 * 1024,
-    source: 'manifesthub',
-  });
-  assert.equal(api.calls.listOpts[0].source, 'manifesthub');
-  assert.equal(api.calls.downloadOpts[0].source, 'manifesthub');
-});
-
-test('sem fonte escolhida, nao manda source undefined explicito', async () => {
-  const api = stubApi();
-  await runManifestCommand({
-    appid: '730',
-    api,
-    cooldown: createCooldown(0),
-    userId: 'u',
-    maxBytes: 1024 * 1024,
-  });
-  assert.equal(api.calls.listOpts[0].source, undefined);
-  assert.equal(api.calls.downloadOpts[0].source, undefined);
-});
-
-test('confirma a solicitacao enquanto processa (onProgress)', async () => {
+test('bot entrega Lua original e proveniencia sem listar manifests', async () => {
   const api = stubApi();
   const progress = [];
-  await runManifestCommand({
-    appid: '730',
-    api,
-    cooldown: createCooldown(0),
-    userId: 'u',
-    maxBytes: 1024 * 1024,
-    source: 'github',
-    onProgress: (text) => progress.push(text),
-  });
-  assert.equal(progress.length, 2, 'uma antes de listar e outra antes de baixar');
-  assert.match(progress[0], /730/);
-  assert.match(progress[0], /`github`/);
-  assert.match(progress[1], /manifest\(s\) localizados/);
-  assert.match(progress[1], /Baixando o ZIP/);
+  const result = await run(api, { source: 'github', onProgress: (s) => progress.push(s) });
+  assert.equal(result.files[0].name, '730.lua');
+  assert.equal(result.files[0].attachment.toString(), 'addappid(730)');
+  assert.match(result.content, /abcdef1/);
+  assert.match(result.content, /fonte `github`/);
+  assert.equal(api.calls[0].source, 'github');
+  assert.match(progress[0], /Baixando Lua/);
 });
-
-test('resumo traz proveniencia e avisa sobre arquivos de configuracao', async () => {
-  const api = stubApi({
-    list: {
-      count: 1,
-      commit: 'abcdef1234567890',
-      version: 'abcdef1234567890',
-      source: 'manifesthub',
-      origin: 'steamtoolsapp/ManifestHub',
-      totalBytes: 10,
-      stale: true,
-      configCount: 1,
-      configFiles: [
-        {
-          name: '730.lua',
-          containsKeys: true,
-          warning: 'Contem chaves de descriptografia de depot.',
-          rawUrl: 'https://raw.githubusercontent.com/steamtoolsapp/ManifestHub/refs/heads/730/730.lua',
-        },
-      ],
-    },
-  });
-  const res = await runManifestCommand({
-    appid: '730',
-    api,
-    cooldown: createCooldown(0),
-    userId: 'u',
-    maxBytes: 1024 * 1024,
-  });
-  assert.match(res.content, /fonte `manifesthub`/);
-  assert.match(res.content, /repo `steamtoolsapp\/ManifestHub`/);
-  assert.match(res.content, /commit `abcdef1`/);
-  assert.match(res.content, /cache antigo/);
-  assert.match(res.content, /chaves de depot/, 'avisa por que o .lua nao veio');
-  assert.match(res.content, /730\.lua/);
-  assert.match(res.content, /https:\/\/raw\.githubusercontent\.com/);
-  assert.equal(res.files.length, 1, 'so o .manifest vai no anexo');
+test('ausencia de Lua propaga erro amigavel sem substituicao por manifests', async () => {
+  const api = stubApi();
+  api.download = async () => { throw new ApiError('sem_lua', BOT_MESSAGES.sem_lua, 404); };
+  await assert.rejects(run(api), (e) => e.code === 'sem_lua');
 });
-
-test('sem manifests mas com config: explica o que existe e por que nao veio', async () => {
-  const api = stubApi({
-    list: {
-      count: 0,
-      configCount: 2,
-      configFiles: [{ name: '730.lua' }, { name: '730.json' }],
-    },
-  });
-  const res = await runManifestCommand({
-    appid: '730',
-    api,
-    cooldown: createCooldown(0),
-    userId: 'u',
-    maxBytes: 1024 * 1024,
-  });
-  assert.match(res.content, /Nenhum \.manifest/);
-  assert.match(res.content, /chaves de depot/);
-  assert.match(res.content, /730\.lua/);
-  assert.equal(res.files, undefined);
-});
-
-test('erro da API propaga com mensagem amigavel', async () => {
-  const api = {
-    listManifests: async () => {
-      throw new ApiError('github_rate_limit', BOT_MESSAGES.github_rate_limit, 503);
-    },
+test('Lua grande oferece link da fonte resolvida', async () => {
+  const api = stubApi();
+  api.createLink = async (_id, opts) => {
+    assert.equal(opts.source, 'github');
+    return { url: 'https://api.test/links/test', expiresAt: '2030-01-01T00:00:00Z' };
   };
-  await assert.rejects(
-    runManifestCommand({ appid: '730', api, cooldown: createCooldown(0), userId: 'u', maxBytes: 1 }),
-    (err) => {
-      assert.ok(err instanceof ApiError);
-      assert.equal(err.code, 'github_rate_limit');
-      assert.match(err.message, /GitHub/);
-      return true;
-    },
-  );
+  const result = await run(api, { maxBytes: 1 });
+  assert.equal(result.files, undefined);
+  assert.match(result.content, /https:\/\/api.test\/links\/test/);
+});
+test('Lua grande sem links aponta API', async () => {
+  const result = await run(stubApi(), { maxBytes: 1 });
+  assert.equal(result.files, undefined);
+  assert.match(result.content, /GET \/download/);
+});
+test('link indisponivel preserva fallback de API', async () => {
+  const api = stubApi();
+  api.createLink = async () => { throw new ApiError('link_desabilitado', 'indisponivel'); };
+  assert.match((await run(api, { maxBytes: 1 })).content, /GET \/download/);
 });
 
 test('errorReply: ApiError vira texto amigavel; erro desconhecido vira generico', () => {
@@ -374,15 +177,15 @@ test('cliente: download devolve Buffer e nome de arquivo', async () => {
     key: 'mk_' + 'a'.repeat(32),
     fetchImpl: async (url) => {
       assert.ok(url.includes('/download?id=730'));
-      return new Response(Buffer.from('PK..zip'), {
+      return new Response(Buffer.from('addappid(730)'), {
         status: 200,
-        headers: { 'content-type': 'application/zip' },
+        headers: { 'content-type': 'application/octet-stream', 'content-disposition': 'attachment; filename="730.lua"' },
       });
     },
   });
   const { buffer, filename } = await api.download('730');
   assert.ok(Buffer.isBuffer(buffer));
-  assert.equal(filename, 'appid-730-manifests.zip');
+  assert.equal(filename, '730.lua');
 });
 
 test('cliente: a chave nunca aparece nas mensagens de erro', async () => {
@@ -401,4 +204,10 @@ test('cliente: a chave nunca aparece nas mensagens de erro', async () => {
     assert.equal(err.message.includes(key), false);
     assert.equal((err.stack || '').includes(key), false);
   }
+});
+
+test('cliente rejeita ZIP de uma API antiga em vez de renomear para Lua', async () => {
+  const api = createApiClient({ baseUrl: 'http://api.test', key: 'test', fetchImpl: async () =>
+    new Response('PK..', { headers: { 'content-type': 'application/zip' } }) });
+  await assert.rejects(api.download('730'), (e) => e.code === 'resposta_invalida');
 });

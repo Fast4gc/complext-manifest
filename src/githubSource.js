@@ -30,6 +30,9 @@ export const ERROR_MESSAGES = {
   branch_invalida: 'Nome de branch invalido para este AppID',
   branch_nao_encontrada: 'Nenhuma branch encontrada para este AppID',
   sem_manifests: 'Nenhum .manifest encontrado nesta branch',
+  sem_lua: 'Nenhum arquivo .lua encontrado para este AppID na fonte',
+  lua_ambiguo: 'Mais de um .lua encontrado sem um arquivo correspondente ao AppID',
+  formato_invalido: 'Formato invalido: use lua ou manifests',
   arquivo_nao_encontrado: 'Manifest listado nao esta mais disponivel no repositorio',
   arquivo_invalido: 'Manifest rejeitado (caminho ou conteudo invalido)',
   arquivo_grande_demais: 'Manifest excede o tamanho maximo permitido',
@@ -182,7 +185,7 @@ export async function branchHead(appid, { signal, src } = {}) {
  *
  * A listagem ja vem separada por politica de entrega:
  *   files       .manifest        -> baixados no cache e entregues no ZIP
- *   configFiles .lua / .json     -> SO listados, com aviso e link direto
+ *   configFiles .lua / .json     -> metadados, com aviso e link direto
  *
  * Nada de `*.vdf` (chave) aparece em qualquer um dos dois.
  *
@@ -230,7 +233,7 @@ export async function listManifestsAt(appid, sha, { signal, src } = {}) {
       continue;
     }
 
-    // config: informacao e link direto. O conteudo NUNCA e pedido.
+    // Nesta listagem, config inclui so metadados. O fluxo Lua baixa separadamente.
     configFiles.push({
       ...base,
       containsKeys: true,
@@ -244,16 +247,18 @@ export async function listManifestsAt(appid, sha, { signal, src } = {}) {
 }
 
 /** Baixa um arquivo do repositorio no commit informado, validando integridade. */
-export async function fetchFile(appid, file, sha, { signal, src } = {}) {
+export async function fetchFile(appid, file, sha, { signal, src, format = 'manifests' } = {}) {
   const s = resolveSrc(src);
   const repo = repositoryOf(s);
   if (!isSafeRepoPath(file.path)) {
     throw new SourceError('caminho_invalido', ERROR_MESSAGES.caminho_invalido);
   }
-  // Trava de politica: so `.manifest` pode ser baixado. `.lua`/`.json` contem
-  // chaves de depot e `*.vdf` tambem — nada deles chega ao disco do servico.
-  // Mesmo que um chamador esqueca de filtrar, aqui bloqueia.
-  if (fileKind(file.path) !== 'manifest') {
+  // O cache/ZIP usa manifests. Lua exige selecao explicita do formato.
+  // JSON e arquivos proibidos continuam fora do download.
+  const allowed = format === 'lua'
+    ? fileKind(file.path) === 'config' && /\.lua$/i.test(file.path)
+    : fileKind(file.path) === 'manifest';
+  if (!allowed) {
     throw new SourceError('arquivo_invalido', ERROR_MESSAGES.arquivo_invalido, file.name);
   }
   if (file.size > config.limits.maxFileBytes) {

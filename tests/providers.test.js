@@ -277,7 +277,7 @@ test('GET /manifests?source= valida escolhe a fonte e registra origem', async ()
     [],
     'fonte pedida respondeu de primeira: nenhuma tentativa anterior',
   );
-  assert.equal(r.body.download, `/download?id=${APPID}&source=manifesthub`);
+  assert.equal(r.body.download, `/download?id=${APPID}&source=manifesthub&format=manifests`);
 });
 
 test('GET /manifests sem source usa a prioridade e registra fallback', async () => {
