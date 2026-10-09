@@ -49,6 +49,42 @@ test('branch apenas com Lua funciona sem depender do cache de manifests', async 
   assert.equal(res.status, 200);
   assert.equal(await res.text(), lua);
 });
+test('gera Lua a partir de JSON mesmo sem Lua pronto, sem baixar manifests', async () => {
+  const data = { appid: 4001890, depot: {
+    4001891: { decryptionkey: 'ab'.repeat(32), manifests: { public: { gid: '6932805931423228382' } } },
+  } };
+  gh.setFiles({ '4001890.json': JSON.stringify(data), 'a.manifest': 'manifest' });
+  const res = await fetch(`${base}/download?id=4001890`, { headers });
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('x-lua-mode'), 'generated');
+  assert.equal(res.headers.get('content-disposition'), 'attachment; filename="4001890.lua"');
+  assert.match(await res.text(), /setManifestid\(4001891, "6932805931423228382"\)/);
+  assert.equal(gh.calls.contents, 1);
+});
+test('dados incompletos retornam 422 sem entregar ZIP ou script parcial', async () => {
+  gh.setFiles({ '4001890.json': JSON.stringify({ appid: 4001890, depot: {
+    4001891: { manifests: { public: { gid: '12' } } },
+  } }), 'a.manifest': 'manifest' });
+  const res = await fetch(`${base}/download?id=4001890`, { headers });
+  assert.equal(res.status, 422);
+  assert.equal((await res.json()).error, 'lua_dados_incompletos');
+  assert.equal(gh.calls.contents, 1);
+});
+test('JSON tem prioridade sobre Lua pronto e links tambem geram Lua', async () => {
+  gh.setFiles({ '4001890.lua': 'old script', '4001890.json': JSON.stringify({ appid: 4001890, depot: {
+    4001891: { decryptionkey: 'ab'.repeat(32), manifests: { public: { gid: '12' } } },
+  } }) });
+  const res = await fetch(`${base}/links`, {
+    method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: '4001890' }),
+  });
+  assert.equal(res.status, 201);
+  const link = await res.json();
+  const download = await fetch(`${base}/links/${link.token}`);
+  assert.equal(download.status, 200);
+  assert.equal(download.headers.get('x-lua-mode'), 'generated');
+  assert.match(await download.text(), /setManifestid\(4001891, "12"\)/);
+});
 test('sem Lua retorna 404 e nao baixa manifests', async () => {
   gh.setFiles({ 'a.manifest': 'manifest' });
   const res = await fetch(`${base}/download?id=4001890`, { headers });

@@ -40,6 +40,8 @@ const STATUS_BY_CODE = {
   sem_manifests: 404,
   sem_lua: 404,
   lua_ambiguo: 409,
+  lua_dados_invalidos: 422,
+  lua_dados_incompletos: 422,
   formato_invalido: 400,
   arquivo_nao_encontrado: 404,
   arquivo_grande_demais: 413,
@@ -292,7 +294,7 @@ query <code>key=&lt;chave&gt;</code>. Rotas <code>/admin/*</code> usam
 <td>Lista os <code>.manifest</code> (baixaveis) e os <code>.lua/.json</code> (so descritos, com link direto).
 Cache com invalidacao por commit e proveniencia por pacote.</td></tr>
 <tr><td><code>GET /download?id=&lt;appid&gt;&amp;source=&lt;fonte&gt;</code></td>
-<td>Arquivo <code>&lt;appid&gt;.lua</code> original da fonte. Para ZIP de manifests, use <code>&amp;format=manifests</code>. Consome 1 uso da chave.</td></tr>
+<td>Arquivo <code>&lt;appid&gt;.lua</code> gerado do JSON do AppID; sem JSON, usa Lua existente. Para ZIP de manifests, use <code>&amp;format=manifests</code>. Consome 1 uso da chave.</td></tr>
 <tr><td><code>GET /sources</code></td><td>Fontes disponiveis, prioridade e o que cada uma NAO faz.</td></tr>
 <tr><td><code>GET /search?q=&lt;nome&gt;</code></td><td>Pesquisa de nome &rarr; AppID (loja da Steam, fonte publica).</td></tr>
 <tr><td><code>GET /status</code></td><td>Status completo: fontes, cache, busca, links, limites.</td></tr>
@@ -327,10 +329,10 @@ curl -X POST {{BASE}}/admin/keys \\
 <code>.lua</code> e <code>.json</code> aparecem na listagem como
 <code>kind: "config"</code>, com <code>containsKeys: true</code>, o aviso
 <code>warning</code> e um <code>rawUrl</code> direto para o repositorio
-publico. O download padrao entrega o Lua existente; JSON permanece apenas listado.
+publico. O download padrao gera Lua a partir do JSON do AppID; sem JSON, entrega Lua existente.
 <code>*.vdf</code> nem e listado. Nada do conteudo recebido e executado.</p>
 <p>Codigos de erro claros: <code>branch_nao_encontrada</code>,
-<code>sem_lua</code>, <code>lua_ambiguo</code>, <code>sem_manifests</code>, <code>fonte_desconhecida</code>,
+<code>sem_lua</code>, <code>lua_dados_incompletos</code>, <code>lua_dados_invalidos</code>, <code>lua_ambiguo</code>, <code>sem_manifests</code>, <code>fonte_desconhecida</code>,
 <code>fonte_desabilitada</code>, <code>nenhuma_fonte</code>,
 <code>github_auth</code>, <code>github_rate_limit</code>,
 <code>github_timeout</code>, <code>zip_grande_demais</code> entre outros.</p>
@@ -508,6 +510,7 @@ function sendLua(res, file) {
   res.setHeader('Content-Type', 'application/octet-stream');
   res.setHeader('Content-Disposition', `attachment; filename="${file.filename}"`);
   res.setHeader('X-Content-SHA256', file.sha256);
+  res.setHeader('X-Lua-Mode', file.mode);
   res.send(file.buffer);
 }
 

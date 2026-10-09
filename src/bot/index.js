@@ -59,7 +59,7 @@ const SOURCE_OPTION = {
 const COMMANDS = [
   {
     name: 'manifest',
-    description: 'Baixa o arquivo .lua disponivel para um AppID',
+    description: 'Gera ou baixa o arquivo .lua para um AppID',
     options: [
       {
         type: 4, // INTEGER

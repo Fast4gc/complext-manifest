@@ -766,7 +766,7 @@ const KEYS_MENU = [
 
 const MANIFESTS_MENU = [
   { id: 'search', icon: '🔍', label: 'Buscar jogo por nome', hint: 'nome → AppID (loja da Steam)' },
-  { id: 'lua', icon: '⬇️', label: 'Baixar arquivo .lua' },
+  { id: 'lua', icon: '⬇️', label: 'Gerar / baixar arquivo .lua' },
   { id: 'consult', icon: '📋', label: 'Consultar manifests de um AppID' },
   { id: 'download', icon: '⬇️', label: 'Baixar ZIP de manifests' },
   { id: 'back', icon: '⤺', label: 'Voltar ao menu principal' },

@@ -128,7 +128,7 @@ export function parseManifestName(name) {
  *
  * O cache e o ZIP de manifests usam apenas a classe manifest.
  * O download Lua seleciona explicitamente um .lua da classe config.
- * JSON continua apenas listado; arquivos forbidden nao sao entregues.
+ * JSON do AppID pode alimentar o gerador; arquivos forbidden nao sao entregues.
  *
  * Trata todo arquivo como DADO: nada aqui executa, interpreta ou avalia
  * scripts Lua (ou qualquer outro conteudo recebido).
@@ -172,7 +172,7 @@ export function isListable(p) {
  * Motivo: esses arquivos carregam chaves de descriptografia de depot.
  */
 export const CONTAINS_KEYS_WARNING =
-  'Pode conter chaves de depot. Lua pode ser baixado separadamente; JSON e apenas listado.';
+  'Pode conter chaves de depot. Lua pode ser baixado separadamente; JSON do AppID pode alimentar o gerador.';
 
 /**
  * URL bruta (raw) para o cliente buscar um arquivo de configuracao direto

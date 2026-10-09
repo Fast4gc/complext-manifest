@@ -1,17 +1,33 @@
 # Manifest Gate
 
-API + bot do Discord que entregam o arquivo `.lua` existente em repositórios
-GitHub com **uma branch por AppID**, autenticação por chave e busca por nome.
+API + bot do Discord que geram e entregam `.lua` a partir dos dados de
+repositórios GitHub com **uma branch por AppID**, autenticação por chave e
+busca por nome.
 
-`GET /download?id=<appid>` e `/manifest appid:<AppID>` entregam o Lua original.
-O arquivo `<appid>.lua` tem preferência; se não houver esse nome, só é aceito
-um único Lua na branch. Sem Lua, a API retorna `sem_lua` (404); vários candidatos
-sem correspondência retornam `lua_ambiguo` (409). A API não gera Lua a partir de
-manifests nem executa scripts. O exemplo local não é enviado às fontes.
+`GET /download?id=<appid>` e `/manifest appid:<AppID>` procuram primeiro
+`<appid>.json` na branch do jogo. O gerador lê `appid` e `depot` (ou `depots`),
+usa `decryptionkey` e `manifests.public.gid` de cada depot e monta chamadas
+`addappid` e `setManifestid`. Não executa scripts nem gera keys criptográficas.
+Manifest IDs precisam ser strings decimais de até 64 bits; keys, 64 caracteres
+hexadecimais. O AppID do JSON deve coincidir com o pedido. Depots compartilhados
+ou DLCs que não tragam todos esses dados causam erro, sem resultado parcial.
+
+Exemplo de uso: `/busca nome:Valheim`, depois `/manifest appid:892970`.
+O arquivo gerado usa as versões da branch pública registradas no JSON, que
+podem estar desatualizadas em relação à Steam. Não consulta nem raspa SteamDB.
+O conteúdo do JSON é baixado no commit fixado na listagem, com integridade
+verificada, e processado em memória. O header `X-Lua-Mode` informa `generated`.
+
+Se não houver JSON, entrega um `.lua` existente (`X-Lua-Mode: existing`).
+O `<appid>.lua` tem preferência; sem esse nome, só aceita um único Lua.
+Se houver JSON inválido ou incompleto, não o ignora para entregar um Lua antigo:
+retorna `lua_dados_invalidos` ou `lua_dados_incompletos` (422), ou tenta a próxima
+fonte quando não há `source` explícito. Sem JSON e sem Lua, retorna `sem_lua` (404).
+Vários candidatos de mesmo nome sem um arquivo na raiz retornam `lua_ambiguo` (409).
 
 O ZIP antigo continua em `GET /download?id=<appid>&format=manifests`, com cache
-persistente. Lua é baixado diretamente da fonte, com validação de integridade,
-sem usar esse cache. JSON é apenas listado; VDF/KEY/ACF continuam excluídos.
+persistente. Geração e download de Lua não usam esse cache. VDF/KEY/ACF e
+`depotkeys.json` continuam excluídos; não é feita coleta de keys de outras bases.
 
 ## Fontes
 
@@ -234,7 +250,7 @@ Comportamento do `/manifest appid:<AppID>`:
 - opção `fonte` com as escolhas vindo da API (`GET /sources`), mais fallback
   automático quando nada é escolhido;
 - o resumo final traz a **proveniência**: fonte e commit;
-- anexa o `.lua` original; se não houver Lua na fonte, informa o erro;
+- anexa o `.lua` gerado a partir do JSON, ou o original quando não há JSON;
 - cooldown por usuário (`DISCORD_COOLDOWN_SECONDS`);
 - se o Lua exceder o limite de anexo, emite um **link temporário**
   (se `PUBLIC_BASE_URL` estiver configurado) com horário de expiração — e só
@@ -263,7 +279,7 @@ Documentação interativa: `GET /docs`. Health: `GET /health`
 | `GET /sources` | chave | Fontes, ordem efetiva, credencial declarada e limites |
 | `GET /search?q=` | chave | Nome → AppID pela loja da Steam |
 | `GET /manifests?id=` | chave | Lista os `.manifest` + proveniência + `configFiles` |
-| `GET /download?id=` | chave | Arquivo `.lua` existente (padrão, ou `format=lua`) |
+| `GET /download?id=` | chave | Lua gerado do JSON ou existente (padrão, ou `format=lua`) |
 | `GET /download?id=&format=manifests` | chave | ZIP contendo **só** `.manifest` |
 | `POST /links` | chave | Link temporário; `format` é `lua` por padrão ou `manifests` |
 | `GET /links/:token` | — (token HMAC) | Consome o link temporário |
@@ -393,14 +409,14 @@ Cada AppID é um pacote. O que existe e o que sai:
 |---|---|---|---|
 | `<appid>.manifest` e `<depot>_<manifest>.manifest` | `manifest` | **sim** | bruto da branch do AppID na fonte escolhida |
 | `<appid>.lua` | `config` | **não** — entregue diretamente pelo download padrão | bruto da branch do AppID |
-| `<appid>.json` | `config` | **não** — só listado | metadados e link da fonte |
+| `<appid>.json` | `config` | **não** — usado internamente na geração do Lua | dados da branch do AppID |
 | `key.vdf`, `*.vdf`, `*.key`, `*.acf`, `depotkeys.json` | `forbidden` | **não, e nem na listagem** | — |
 
 O `rawUrl` aponta para `https://raw.githubusercontent.com/<repo>/refs/heads/<appid>/<arquivo>`,
 ou seja, **para o repositório público de origem** — o mesmo que um navegador
 abriria. O Lua também pode ser baixado pelo endpoint autenticado `/download`.
 Um pacote não contém o que não existe na origem: o serviço não inventa
-manifests, scripts nem chaves a partir de um AppID. Branches apenas com Lua
+manifests nem chaves; gera scripts somente com os dados disponíveis. Branches apenas com Lua
 funcionam no download padrão, mesmo sem nenhum `.manifest`.
 
 ### Erros claros
@@ -516,7 +532,7 @@ Configurações (`./.env`) e cache (`./data`) são mantidos.
   entra pelo `.env` do operador.
 - Caminhos validados contra traversal para `.manifest` e `.lua`.
 - `key.vdf`, `*.vdf`, `*.key`, `*.acf` e `depotkeys.json` continuam excluídos.
-  Lua é entregue como arquivo original; JSON é apenas listado.
+  Lua é gerado do JSON do AppID ou entregue como arquivo original.
 - Arquivos recebidos são tratados como **dado**: validados e servidos como
   `application/octet-stream` (Lua) ou `application/zip`, nunca executados. Nenhum Lua é interpretado.
 - Links temporários: payload assinado HMAC-SHA256 com AppID, fonte e
@@ -596,8 +612,8 @@ respondidas novamente pelo tratamento de erro.
 
 - Somente extensão `.manifest` sai em ZIP (decisão de design; alterar exige
   mudar o código).
-- Lua precisa existir na fonte configurada: o arquivo não é gerado a partir
-  dos manifests. JSON permanece apenas listado.
+- A geração exige JSON do AppID com depot keys e Manifest IDs públicos completos.
+  Sem JSON, um Lua pronto precisa existir. Manifests binários não são convertidos.
 - O bot precisa de `DISCORD_API_KEY` no formato `mk_` + 32 caracteres.
 - Rate limit do GitHub sem token é baixo (~60 req/h); use `GITHUB_TOKEN`.
   Sem token, uma rajada de AppIDs distintos pode esgotar a cota — o erro é

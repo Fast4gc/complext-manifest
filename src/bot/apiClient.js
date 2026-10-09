@@ -17,6 +17,8 @@ export const BOT_MESSAGES = {
   branch_nao_encontrada: 'Nao existe branch para esse AppID nas fontes configuradas.',
   sem_lua: 'Nenhum .lua existente encontrado para esse AppID nas fontes consultadas.',
   lua_ambiguo: 'A fonte tem varios .lua sem um arquivo identificado pelo AppID.',
+  lua_dados_invalidos: 'A fonte tem dados invalidos; nao foi possivel gerar o Lua.',
+  lua_dados_incompletos: 'Faltam keys ou manifests publicos na fonte para gerar o Lua completo.',
   sem_manifests: 'Nenhum .manifest encontrado para esse AppID.',
   appid_invalido: 'AppID invalido. Use apenas numeros (ex.: 123456).',
   formato_de_chave_invalido: 'Chave da API invalida no servidor (contate o administrador).',
@@ -142,6 +144,7 @@ export function createApiClient({ baseUrl, key, timeoutMs = 30_000, fetchImpl = 
         buffer, filename: `${appid}.lua`,
         source: res.headers.get('x-manifest-gate-source'),
         commit: res.headers.get('x-manifest-gate-version'),
+        mode: res.headers.get('x-lua-mode'),
       };
     },
 

@@ -30,8 +30,10 @@ export const ERROR_MESSAGES = {
   branch_invalida: 'Nome de branch invalido para este AppID',
   branch_nao_encontrada: 'Nenhuma branch encontrada para este AppID',
   sem_manifests: 'Nenhum .manifest encontrado nesta branch',
-  sem_lua: 'Nenhum arquivo .lua encontrado para este AppID na fonte',
+  sem_lua: 'Nenhum Lua ou JSON do AppID encontrado na fonte',
   lua_ambiguo: 'Mais de um .lua encontrado sem um arquivo correspondente ao AppID',
+  lua_dados_invalidos: 'Dados invalidos para gerar Lua (AppID, depot, key ou Manifest ID)',
+  lua_dados_incompletos: 'Nao foi possivel gerar Lua: faltam depots, keys ou manifests publicos na fonte',
   formato_invalido: 'Formato invalido: use lua ou manifests',
   arquivo_nao_encontrado: 'Manifest listado nao esta mais disponivel no repositorio',
   arquivo_invalido: 'Manifest rejeitado (caminho ou conteudo invalido)',
@@ -254,9 +256,11 @@ export async function fetchFile(appid, file, sha, { signal, src, format = 'manif
     throw new SourceError('caminho_invalido', ERROR_MESSAGES.caminho_invalido);
   }
   // O cache/ZIP usa manifests. Lua exige selecao explicita do formato.
-  // JSON e arquivos proibidos continuam fora do download.
+  // O JSON do AppID pode ser lido internamente para gerar Lua.
   const allowed = format === 'lua'
     ? fileKind(file.path) === 'config' && /\.lua$/i.test(file.path)
+    : format === 'lua-json'
+    ? fileKind(file.path) === 'config' && safeBaseName(file.path).toLowerCase() === `${appid}.json`
     : fileKind(file.path) === 'manifest';
   if (!allowed) {
     throw new SourceError('arquivo_invalido', ERROR_MESSAGES.arquivo_invalido, file.name);
