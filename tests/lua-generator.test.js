@@ -10,6 +10,22 @@ function fixture() {
   } };
 }
 const generate = (data) => generateLua('4001890', Buffer.from(JSON.stringify(data)));
+test('referencias vazias e compartilhadas nao bloqueiam depots completos e ficam documentadas', () => {
+  const data = fixture();
+  data.depot['228988'] = { depotfromapp: '228980', sharedinstall: '1' };
+  data.depot['4001892'] = {};
+  const result = generate(data);
+  assert.equal(result.depotCount, 1);
+  assert.equal(result.skippedDepots.length, 2);
+  assert.match(result.buffer.toString(), /Omitted depot 228988: shared \(AppID 228980\)/);
+  assert.match(result.buffer.toString(), /Omitted depot 4001892: empty/);
+  assert.doesNotMatch(result.buffer.toString(), /addappid\(228988/);
+});
+test('apenas referencias nao geram um script vazio', () => {
+  assert.throws(() => generate({ appid: 4001890, depot: {
+    228988: { depotfromapp: '228980' }, 4001892: {},
+  } }), (e) => e.code === 'lua_dados_incompletos');
+});
 test('gera sintaxe do exemplo, preserva Manifest ID de 64 bits e nao emite metadados como codigo', () => {
   const data = fixture();
   data.name = '\nrequire("evil")';

@@ -9,8 +9,11 @@ busca por nome.
 usa `decryptionkey` e `manifests.public.gid` de cada depot e monta chamadas
 `addappid` e `setManifestid`. Não executa scripts nem gera keys criptográficas.
 Manifest IDs precisam ser strings decimais de até 64 bits; keys, 64 caracteres
-hexadecimais. O AppID do JSON deve coincidir com o pedido. Depots compartilhados
-ou DLCs que não tragam todos esses dados causam erro, sem resultado parcial.
+hexadecimais. O AppID do JSON deve coincidir com o pedido. Referências vazias e depots de outro AppID sem dados próprios são omitidos,
+com os IDs e motivos registrados em comentários no Lua. O bot informa a
+quantidade omitida. Depots com dados próprios mas sem key ou manifest público
+continuam causando erro; nenhuma key ou versão é inventada. Se só houver
+referências sem dados, a geração também falha.
 
 Exemplo de uso: `/busca nome:Valheim`, depois `/manifest appid:892970`.
 O arquivo gerado usa as versões da branch pública registradas no JSON, que

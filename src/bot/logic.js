@@ -54,6 +54,7 @@ export async function runManifestCommand({
     content: [
       `Arquivo Lua do AppID **${appid}**`,
       provenance.mode === 'generated' ? 'gerado a partir dos dados da fonte' : null,
+      provenance.omittedDepots > 0 ? `${provenance.omittedDepots} referencias vazias/compartilhadas omitidas (detalhes no Lua)` : null,
       provenance.source ? `fonte \`${provenance.source}\`` : null,
       commit ? `commit \`${commit}\`` : null,
       `${(buffer.length / 1024).toFixed(1)} KB`,

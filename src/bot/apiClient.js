@@ -145,6 +145,7 @@ export function createApiClient({ baseUrl, key, timeoutMs = 30_000, fetchImpl = 
         source: res.headers.get('x-manifest-gate-source'),
         commit: res.headers.get('x-manifest-gate-version'),
         mode: res.headers.get('x-lua-mode'),
+        omittedDepots: Number(res.headers.get('x-lua-omitted-depots') || 0),
       };
     },
 

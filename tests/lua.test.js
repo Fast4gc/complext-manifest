@@ -51,12 +51,15 @@ test('branch apenas com Lua funciona sem depender do cache de manifests', async 
 });
 test('gera Lua a partir de JSON mesmo sem Lua pronto, sem baixar manifests', async () => {
   const data = { appid: 4001890, depot: {
+    228988: { depotfromapp: '228980', sharedinstall: '1' },
+    4001892: {},
     4001891: { decryptionkey: 'ab'.repeat(32), manifests: { public: { gid: '6932805931423228382' } } },
   } };
   gh.setFiles({ '4001890.json': JSON.stringify(data), 'a.manifest': 'manifest' });
   const res = await fetch(`${base}/download?id=4001890`, { headers });
   assert.equal(res.status, 200);
   assert.equal(res.headers.get('x-lua-mode'), 'generated');
+  assert.equal(res.headers.get('x-lua-omitted-depots'), '2');
   assert.equal(res.headers.get('content-disposition'), 'attachment; filename="4001890.lua"');
   assert.match(await res.text(), /setManifestid\(4001891, "6932805931423228382"\)/);
   assert.equal(gh.calls.contents, 1);

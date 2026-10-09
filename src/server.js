@@ -511,6 +511,7 @@ function sendLua(res, file) {
   res.setHeader('Content-Disposition', `attachment; filename="${file.filename}"`);
   res.setHeader('X-Content-SHA256', file.sha256);
   res.setHeader('X-Lua-Mode', file.mode);
+  res.setHeader('X-Lua-Omitted-Depots', String(file.skippedDepots?.length || 0));
   res.send(file.buffer);
 }
 
