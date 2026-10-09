@@ -569,6 +569,23 @@ inexistente), para que segredos da sua máquina não mudem o resultado.
 
 ## Limites conhecidos
 
+### Bot com `chave_nao_encontrada`
+
+O token Discord e `DISCORD_API_KEY` sao credenciais diferentes. Se o bot
+conecta mas a API recusa a chave, confira se `DISCORD_API_URL` aponta para
+a API correta. No host dessa API, rode `./install.sh repair-discord-key`.
+O comando gera uma nova chave no volume da API, atualiza `.env` sem exibir
+o segredo e recria os servicos API/bot com o perfil Discord. As outras
+chaves sao preservadas. Feche paineis antigos para descartar o ambiente
+antigo; com o bot no Compose, nao inicie outra copia pelo painel.
+
+`Unknown interaction` pode ocorrer quando a resposta inicial chega tarde.
+O bot ja confirma os comandos antes das consultas de rede. Confira tambem
+se ha outra instancia usando o mesmo token. Interacoes expiradas nao sao
+respondidas novamente pelo tratamento de erro.
+
+### Arquivos e fontes
+
 - Somente extensão `.manifest` sai em ZIP (decisão de design; alterar exige
   mudar o código).
 - Lua precisa existir na fonte configurada: o arquivo não é gerado a partir

@@ -11,6 +11,7 @@
 #   ./install.sh start|stop|restart|status
 #   ./install.sh logs [--follow]
 #   ./install.sh update
+#   ./install.sh repair-discord-key
 #   ./install.sh uninstall [--purge]
 # ------------------------------------------------------------------
 set -euo pipefail
@@ -290,7 +291,7 @@ setup_env() {
 ensure_bot_key() {
   local current key_value
   current="$(env_get DISCORD_API_KEY || true)"
-  if [ -n "$current" ]; then
+  if [ -n "$current" ] && [ "${1:-}" != "--replace" ]; then
     log "chave da API do bot ja existe no .env, preservada."
     return 0
   fi
@@ -436,6 +437,15 @@ cmd_update() {
   log "atualizacao concluida."
 }
 
+cmd_repair_discord_key() {
+  have_docker || die "Docker indisponivel"
+  [ -f "$ENV_FILE" ] || die ".env nao encontrado; rode install primeiro."
+  ensure_bot_key --replace
+  chmod 600 "$ENV_FILE"
+  compose --profile discord up -d
+  log "chave do bot reparada e containers atualizados. Feche e reabra paineis antigos para recarregar o ambiente."
+}
+
 cmd_uninstall() {
   exec "$PROJECT_DIR/uninstall.sh" "$@"
 }
@@ -452,6 +462,7 @@ main() {
     status)   cmd_status "$@" ;;
     logs)     cmd_logs "$@" ;;
     update)   cmd_update "$@" ;;
+    repair-discord-key) cmd_repair_discord_key "$@" ;;
     uninstall) cmd_uninstall "$@" ;;
     -h|--help|help) usage ;;
     *) warn "comando desconhecido: $cmd"; usage 1 ;;

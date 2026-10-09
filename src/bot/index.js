@@ -10,7 +10,7 @@
  * Credenciais (DISCORD_TOKEN, DISCORD_API_KEY) nunca aparecem em logs ou
  * respostas. O token vem do .env, assim como o ID da guild.
  */
-import { Client, GatewayIntentBits, REST, Routes } from 'discord.js';
+import { Client, GatewayIntentBits, REST, Routes, MessageFlags } from 'discord.js';
 import { config } from '../config.js';
 import { createApiClient, ApiError } from './apiClient.js';
 import { createCooldown } from './cooldown.js';
@@ -114,6 +114,9 @@ async function registerCommands() {
       console.log('AVISO: nenhuma fonte configurada; campo fonte ficara livre.');
     }
   } catch (err) {
+    if (err instanceof ApiError && ['chave_nao_encontrada', 'chave_revogada', 'chave_expirada', 'limite_de_usos_atingido'].includes(err.code)) {
+      console.error('DISCORD_API_KEY recusada pela API. Confira DISCORD_API_URL e, no host da API, rode: ./install.sh repair-discord-key. Reabra paineis antigos apos o reparo.');
+    }
     console.log(
       'AVISO: nao consegui listar /sources agora (' +
         (err?.code || 'erro') +
@@ -233,7 +236,7 @@ client.on('interactionCreate', async (interaction) => {
       if (!cd.ok) {
         await interaction.reply({
           content: `Aguarde **${cd.retryInSec}s** antes de pesquisar de novo.`,
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
         return;
       }
@@ -260,8 +263,14 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
-    await interaction.reply({ content: 'Comando desconhecido.', ephemeral: true });
+    await interaction.reply({ content: 'Comando desconhecido.', flags: MessageFlags.Ephemeral });
   } catch (err) {
+    // Discord ja invalidou o token ou outra instancia confirmou a interacao.
+    // Repetir reply aqui apenas produz outro erro e pode disputar com outro bot.
+    if ([10062, 40060].includes(Number(err?.code ?? err?.rawError?.code))) {
+      console.warn('Interacao expirada ou ja confirmada. Confira a latencia e se ha outra instancia deste bot em execucao.');
+      return;
+    }
     const text =
       err instanceof ApiError && err.code === 'limite_de_requisicoes'
         ? err.message
@@ -270,7 +279,7 @@ client.on('interactionCreate', async (interaction) => {
       if (interaction.deferred || interaction.replied) {
         await interaction.editReply({ content: text });
       } else {
-        await interaction.reply({ content: text, ephemeral: true });
+        await interaction.reply({ content: text, flags: MessageFlags.Ephemeral });
       }
     } catch (replyErr) {
       console.error('falha ao responder interacao:', replyErr?.message || replyErr);

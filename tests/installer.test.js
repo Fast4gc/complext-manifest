@@ -202,6 +202,24 @@ test('restart usa up -d, para reler o .env', () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('repair-discord-key substitui chave antiga sem exibir segredo e recria bot', () => {
+  const dir = makeProject();
+  const bin = makeStubBin(dir);
+  runScript(dir, bin, 'install.sh', ['install', '--api-only']);
+  const envFile = path.join(dir, '.env');
+  const oldKey = 'mk_' + 'b'.repeat(32);
+  fs.writeFileSync(envFile, fs.readFileSync(envFile, 'utf8').replace(/^DISCORD_API_KEY=.*$/m, `DISCORD_API_KEY=${oldKey}`));
+  const res = runScript(dir, bin, 'install.sh', ['repair-discord-key']);
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(envValue(dir, 'DISCORD_API_KEY'), BASE_KEY);
+  assert.match(res.log, /run --rm --no-deps api node src\/cli.js key:create/);
+  assert.match(res.log, /--profile discord up -d/);
+  assert.ok(!`${res.stdout}${res.stderr}${res.log}`.includes(BASE_KEY));
+  assert.ok(!`${res.stdout}${res.stderr}${res.log}`.includes(oldKey));
+  assert.equal(fs.statSync(envFile).mode & 0o777, 0o600);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('DISCORD_API_URL padrao aponta para o servico do Compose', () => {
   const dir = makeProject();
   const bin = makeStubBin(dir);
