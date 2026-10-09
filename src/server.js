@@ -123,11 +123,13 @@ function apiKeyFrom(req) {
 function requireApiKey(req, res) {
   const raw = apiKeyFrom(req);
   if (!raw || !KEY_FORMAT.test(raw)) {
+    console.warn(`autenticacao recusada: ${req.method} ${req.path} motivo=formato_de_chave_invalido`);
     fail(res, 'formato_de_chave_invalido');
     return null;
   }
   const check = validateKey(raw);
   if (!check.ok) {
+    console.warn(`autenticacao recusada: ${req.method} ${req.path} motivo=${check.reason}`);
     fail(res, check.reason);
     return null;
   }

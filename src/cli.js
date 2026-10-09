@@ -13,7 +13,9 @@
  * Sem argumentos abre o painel interativo (menu bonito com todas
  * as acoes do backend):  node src/cli.js   ·   npm run key
  */
-import { createKey, listKeys, revokeKey } from './store.js';
+import { createKey, listKeys, revokeKey, validateKey } from './store.js';
+import { config, ENV_FILE } from './config.js';
+import { checkBotApi } from './bot/diagnostics.js';
 import { cacheStats, invalidate } from './cache.js';
 import { runMenu } from './menu.js';
 
@@ -30,8 +32,19 @@ function flag(name, fallback = null) {
   return value;
 }
 
-function runCommand(command, args) {
+async function runCommand(command, args) {
   switch (command) {
+  case 'bot:check': {
+    const local = validateKey(config.discord.apiKey);
+    const remote = await checkBotApi({ baseUrl: config.discord.apiUrl, key: config.discord.apiKey });
+    console.log(JSON.stringify({
+      envFile: ENV_FILE, dataDir: config.dataDir,
+      localKey: local.ok ? 'valida' : local.reason,
+      api: remote,
+    }, null, 2));
+    process.exitCode = remote.ok ? 0 : 1;
+    break;
+  }
   case 'key:create': {
     const name = flag('name', 'sem-nome');
     const uses = flag('uses');
@@ -98,5 +111,5 @@ function runCommand(command, args) {
 if (!command) {
   runMenu();
 } else {
-  runCommand(command, args);
+  await runCommand(command, args);
 }

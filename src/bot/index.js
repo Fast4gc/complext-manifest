@@ -15,6 +15,7 @@ import { config } from '../config.js';
 import { createApiClient, ApiError } from './apiClient.js';
 import { createCooldown } from './cooldown.js';
 import { runManifestCommand, errorReply } from './logic.js';
+import { apiDestination } from './diagnostics.js';
 
 const { token, guildId, apiKey, apiUrl, cooldownSeconds, maxFileMb, timeoutMs } = config.discord;
 
@@ -177,6 +178,7 @@ async function registerCommands() {
 
 client.once('clientReady', async () => {
   console.log(`bot online como ${client.user?.tag || '(sem tag)'}; guild=${guildId}`);
+  console.log(`API usada pelo bot: ${apiDestination(apiUrl)}; codigo: ${import.meta.url}`);
   try {
     await registerCommands();
   } catch (err) {

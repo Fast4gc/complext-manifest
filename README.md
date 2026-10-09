@@ -571,6 +571,14 @@ inexistente), para que segredos da sua máquina não mudem o resultado.
 
 ### Bot com `chave_nao_encontrada`
 
+Para identificar o destino e testar a chave sem mostra-la, execute
+`node src/cli.js bot:check` no ambiente do bot. No Compose, use
+`docker compose --profile discord exec bot node src/cli.js bot:check`.
+O resultado mostra a URL sem credenciais, a validacao na base local e a
+resposta da API. Uma chave local valida nao garante que a API remota usa
+a mesma base. Se o bot foi iniciado pelo painel, o diagnostico precisa
+usar a mesma pasta/ambiente; um painel antigo pode reter variaveis antigas.
+
 O token Discord e `DISCORD_API_KEY` sao credenciais diferentes. Se o bot
 conecta mas a API recusa a chave, confira se `DISCORD_API_URL` aponta para
 a API correta. No host dessa API, rode `./install.sh repair-discord-key`.
