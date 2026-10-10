@@ -14,13 +14,12 @@ import { spawn } from 'node:child_process';
 import { serviceArgs } from './panelServices.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import archiver from 'archiver';
 import { fileURLToPath } from 'node:url';
 import { createKey, listKeys, revokeKey } from './store.js';
-import { cacheStats, getManifests, invalidate } from './cache.js';
+import { cacheStats, invalidate } from './cache.js';
 import { getLua } from './lua.js';
 import { searchGames } from './search.js';
-import { assertZipPolicy, validateZipEntries, zipFilename } from './zip.js';
+import { luaDownloadPath } from './downloadFiles.js';
 import { SourceError } from './providers/index.js';
 import { describeSources } from './providers/index.js';
 import { config, PROJECT_NAME } from './config.js';
@@ -79,7 +78,7 @@ function banner() {
   const inner = WIDTH() - 4;
   const line = '═'.repeat(inner);
   const title = ` ⚡ ${PROJECT_NAME.toUpperCase()} — PAINEL DE CONTROLE`;
-  const sub = ` API de download de Lua e manifests · v${VERSION}`;
+  const sub = ` Gerador e download de Lua · v${VERSION}`;
   return [
     `╔${line}╗`,
     `║${padRow(cyan(title), inner)}║`,
@@ -483,7 +482,7 @@ async function askAppIdAndSource() {
     },
     ...order.map((id) => ({ icon: '🌐', label: id, ref: id })),
   ];
-  const chosen = await select('FONTE DOS MANIFESTS', items);
+  const chosen = await select('FONTE DO LUA', items);
   if (!chosen) return null;
   return { appid, source: chosen.ref };
 }
@@ -515,52 +514,13 @@ async function searchFlow() {
   await pause();
 }
 
-async function manifestsFlow() {
-  frame('CONSULTAR MANIFESTS DE UM APPID');
-  const picked = await askAppIdAndSource();
-  if (!picked) return;
-  const refresh = await confirm('Forçar atualização (refresh=1)?');
-  frame('CONSULTANDO...');
-  console.log(`  ${dim('buscando na fonte — pode demorar alguns segundos...\n')}`);
-  try {
-    const meta = await getManifests(picked.appid, {
-      source: picked.source,
-      refresh,
-    });
-    frame(`MANIFESTS DO APPID ${picked.appid}`);
-    cards([
-      ['Fonte', meta.source],
-      ['Origem', meta.origin || '—'],
-      ['Commit', shortId(meta.commit || '')],
-      ['Branch', meta.branch || '—'],
-      ['Arquivos', `${meta.files.length} manifest(s) · ${fmtBytes(meta.totalBytes)}`],
-      ['Configs', `${meta.configFiles?.length || 0} (só listadas, nunca entregues)`],
-      ['Buscado em', fmtDate(meta.fetchedAt)],
-      ['Cache', meta.stale ? yellow('stale') : meta.cached ? green('hit') : 'miss'],
-    ]);
-    if (meta.files.length > 0) {
-      console.log(dim('\n  primeiros arquivos:'));
-      for (const f of meta.files.slice(0, 8)) {
-        console.log(`    ${dim('·')} ${f.name} ${dim(fmtBytes(f.size))}`);
-      }
-      if (meta.files.length > 8) {
-        console.log(dim(`    ... e mais ${meta.files.length - 8}`));
-      }
-    }
-  } catch (err) {
-    frame('CONSULTA FALHOU');
-    showError(err);
-  }
-  await pause();
-}
-
 async function downloadLuaFlow() {
   frame('BAIXAR ARQUIVO LUA');
   const picked = await askAppIdAndSource();
   if (!picked) return;
   try {
     const file = await getLua(picked.appid, { source: picked.source });
-    const out = path.resolve(process.cwd(), file.filename);
+    const out = luaDownloadPath(file.filename);
     if (fs.existsSync(out) && !await confirm(`Substituir ${out}?`)) return;
     fs.writeFileSync(out, file.buffer);
     frame('LUA PRONTO');
@@ -568,47 +528,6 @@ async function downloadLuaFlow() {
   } catch (err) {
     frame('DOWNLOAD FALHOU');
     showError(err);
-  }
-  await pause();
-}
-
-async function downloadZipFlow() {
-  frame('BAIXAR ZIP DE MANIFESTS');
-  const picked = await askAppIdAndSource();
-  if (!picked) return;
-  const ok = await confirm(
-    `Baixar os manifests do AppID ${picked.appid}${picked.source ? ` (fonte ${picked.source})` : ''} como ZIP?`,
-    { def: true },
-  );
-  if (!ok) return;
-  frame('BAIXANDO...');
-  console.log(`  ${dim('resolvendo a fonte e montando o ZIP...\n')}`);
-  try {
-    const meta = await getManifests(picked.appid, { source: picked.source });
-    const entries = validateZipEntries(meta);
-    assertZipPolicy(entries);
-    const out = path.resolve(process.cwd(), zipFilename(meta.appid, { source: meta.source }));
-    await new Promise((resolve, reject) => {
-      const output = fs.createWriteStream(out);
-      const archive = archiver('zip', { zlib: { level: 9 } });
-      archive.on('error', reject);
-      output.on('error', reject);
-      output.on('close', resolve);
-      archive.pipe(output);
-      for (const entry of entries) archive.file(entry.full, { name: entry.name });
-      archive.finalize();
-    });
-    frame('ZIP PRONTO');
-    console.log(`  ${green('✓')} ${meta.files.length} manifest(s) · ${fmtBytes(meta.totalBytes)}`);
-    console.log(`  ${bold('arquivo:')} ${out}`);
-  } catch (err) {
-    if (err instanceof SourceError) {
-      frame('DOWNLOAD FALHOU');
-      showError(err);
-    } else {
-      frame('DOWNLOAD FALHOU');
-      console.log(`  ${red('✗')} ${err?.message || err}`);
-    }
   }
   await pause();
 }
@@ -764,7 +683,7 @@ async function updateFlow() {
 
 const MAIN_MENU = [
   { id: 'keys', icon: '🔑', label: 'Chaves de API', hint: 'criar · listar · revogar' },
-  { id: 'manifests', icon: '📦', label: 'Manifests', hint: 'buscar jogo · baixar Lua · ZIP de manifests' },
+  { id: 'manifests', icon: '📦', label: 'Gerador Lua', hint: 'buscar jogo · gerar e baixar .lua' },
   { id: 'cache', icon: '🧠', label: 'Cache', hint: 'estatísticas · invalidar por AppID' },
   { id: 'service', icon: '🌐', label: 'Serviço', hint: 'status · API · bot · atualizar' },
   { id: 'exit', icon: '🚪', label: 'Sair', hint: 'fechar o painel' },
@@ -780,8 +699,6 @@ const KEYS_MENU = [
 const MANIFESTS_MENU = [
   { id: 'search', icon: '🔍', label: 'Buscar jogo por nome', hint: 'nome → AppID (loja da Steam)' },
   { id: 'lua', icon: '⬇️', label: 'Gerar / baixar arquivo .lua' },
-  { id: 'consult', icon: '📋', label: 'Consultar manifests de um AppID' },
-  { id: 'download', icon: '⬇️', label: 'Baixar ZIP de manifests' },
   { id: 'back', icon: '⤺', label: 'Voltar ao menu principal' },
 ];
 
@@ -814,12 +731,10 @@ async function keysMenu() {
 
 async function manifestsMenu() {
   for (;;) {
-    const item = await select('MANIFESTS', MANIFESTS_MENU);
+    const item = await select('GERADOR LUA', MANIFESTS_MENU);
     if (!item || item.id === 'back') return;
     if (item.id === 'search') await searchFlow();
     else if (item.id === 'lua') await downloadLuaFlow();
-    else if (item.id === 'consult') await manifestsFlow();
-    else if (item.id === 'download') await downloadZipFlow();
   }
 }
 

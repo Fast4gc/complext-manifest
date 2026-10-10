@@ -350,7 +350,7 @@ node src/cli.js cache:invalidate <appid>
 
 Rode **sem argumentos** — abre uma tela com todas as ações do
 backend: criar/listar/revogar chaves, buscar jogo por nome, baixar Lua,
-consultar manifests de um AppID, baixar o ZIP, ver estatísticas
+gerar o arquivo .lua, ver estatísticas
 da cache, invalidar entrada por AppID, ver o status do serviço e
 ainda iniciar a API ou o bot do Discord:
 
@@ -358,22 +358,25 @@ ainda iniciar a API ou o bot do Discord:
 node src/cli.js        # ou: npm run key  ·  npm run menu
 ```
 
-Atalho (evita o comando grande do Docker):
+Atalho no host (prepara Node 22 e dependências quando necessário):
 
 ```bash
-./menu-painel.sh                 # abre o painel (host com Node, ou container)
+./menu-painel.sh                 # abre o painel no host
 ./menu-painel.sh key:list        # repassa args ao cli.js
 ./menu-painel.sh --install       # cria o comando global `menu-painel`
 sudo menu-painel                 # abre de qualquer pasta (pede sudo sozinho no --install)
 ```
 
-No Docker (host sem Node, como numa VPS), o mesmo painel
-abre dentro do container — o `-it` é obrigatório para a
-tela interativa (o `menu-painel.sh` já cuida disso):
+Os downloads do painel são salvos em `<DATA_DIR>/downloads`, por padrão
+`./data/downloads/730.lua`. Dentro de um container com o volume padrão,
+`/app/data/downloads/730.lua` aparece no host em `data/downloads/730.lua`.
+O painel nunca tenta salvar na raiz `/app`, que pertence à imagem e não é
+escrevível pelo usuário do serviço. O menu de download oferece somente Lua;
+o ZIP legado continua acessível apenas pelo endpoint explícito da API.
 
-```bash
-docker compose run --rm -it --no-deps api node src/cli.js
-```
+API e bot continuam no Docker. As ações de serviço do painel executam
+Docker Compose e não iniciam cópias paralelas do bot. O painel no host pode
+ser fechado sem parar os serviços; use “Parar bot” para encerrá-lo.
 
 Navegação: `↑` `↓` movem, `Enter` escolhe, `1-9` é atalho
 direto, `Esc` volta, `Ctrl+C` sai. Em ambiente sem terminal
